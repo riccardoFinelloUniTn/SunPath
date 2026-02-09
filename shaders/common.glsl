@@ -5,11 +5,12 @@
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_shader_explicit_arithmetic_types : require // uint32_t
 
-// the actual payload is not defined here because raygen would define it as RayPayloadEXT, whereas hit/miss would define it as RayPayloadInEXT
 struct ray_payload_t {
-    vec3 color;
-    bool shadow_ray_miss;
-    float shadow_ray_hit_dist;
+    vec3 albedo;    // Surface color
+    vec3 normal;    // Surface normal
+    vec3 emission;  // If the object is a light source
+    float dist;     // Distance to hit (t)
+    int  type;      // 0 = Hit Object, 1 = Miss/Sky
 };
 
 struct vertex_attributes_t {
