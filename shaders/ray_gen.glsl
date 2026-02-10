@@ -34,7 +34,7 @@ void main() {
 
     vec3 total_radiance = vec3(0.0);
     int SAMPLES = 50;
-
+    init_rng(gl_LaunchIDEXT.xy, 1);
     for(int i = 0; i < SAMPLES; i++){
         const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
         const vec2 inUV = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
@@ -42,7 +42,7 @@ void main() {
         d.y = -d.y;
 
         // TODO: Pass actual frame count from Rust push constants later.
-        init_rng(gl_LaunchIDEXT.xy, 1);
+
 
         vec4 origin    = matrices_uniform_buffer.view_inverse * vec4(0, 0, 0, 1);
         vec4 target    = matrices_uniform_buffer.proj_inverse * vec4(d.x, d.y, 1, 1);
@@ -85,7 +85,7 @@ void main() {
 
     }
 
-    vec3 average_radiance = total_radiance / SAMPLES;
+    vec3 average_radiance = total_radiance / float(SAMPLES);
 
 
     //output
