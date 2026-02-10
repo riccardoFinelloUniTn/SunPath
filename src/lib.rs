@@ -48,6 +48,10 @@ pub struct Renderer {
     default_sampler: vulkan_abstraction::Sampler,
 
     core: Rc<vulkan_abstraction::Core>,
+
+    //used for temporal denoising/antialiasing
+    //2 images to avoid race conditions when reading/writing
+    pub accumulation_images: [vulkan_abstraction::Image; 2],
 }
 
 impl Renderer {
@@ -103,6 +107,23 @@ impl Renderer {
         let shader_binding_table = vulkan_abstraction::ShaderBindingTable::new(&core, &ray_tracing_pipeline)?;
 
         let image_dependant_data = HashMap::new();
+
+        let create_accum_image = |name: &'static str| -> SrResult<vulkan_abstraction::Image> {
+            vulkan_abstraction::Image::new(
+                core.clone(),
+                image_extent, // <--- USE THIS (it's already a vk::Extent3D)
+                vk::Format::R32G32B32A32_SFLOAT,
+                vk::ImageTiling::OPTIMAL,
+                gpu_allocator::MemoryLocation::GpuOnly,
+                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
+                name
+            )
+        };
+
+        let accumulation_images = [
+            create_accum_image("Accumulation_Ping")?,
+            create_accum_image("Accumulation_Pong")?,
+        ];
 
         let fallback_texture_image = {
             const RESOLUTION: u32 = 64;
@@ -166,6 +187,8 @@ impl Renderer {
                 image_extent,
                 image_format,
 
+                accumulation_images,
+
                 fallback_texture_image,
                 fallback_texture_sampler,
                 default_sampler,
@@ -185,6 +208,23 @@ impl Renderer {
         }
         self.clear_image_dependent_data();
         self.image_extent = new_extent;
+
+        let create_accum_image = |name: &'static str| -> SrResult<vulkan_abstraction::Image> {
+            vulkan_abstraction::Image::new(
+                self.core.clone(),
+                new_extent,
+                vk::Format::R32G32B32A32_SFLOAT,
+                vk::ImageTiling::OPTIMAL,
+                gpu_allocator::MemoryLocation::GpuOnly,
+                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
+                name
+            )
+        };
+
+        self.accumulation_images = [
+            create_accum_image("Accumulation_1")?,
+            create_accum_image("Accumulation_2")?,
+        ];
 
         Ok(())
     }
