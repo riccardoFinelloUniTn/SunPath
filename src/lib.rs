@@ -255,6 +255,8 @@ impl Renderer {
                 &self.shader_data_buffers,
             )?;
 
+            descriptor_sets.update_accumulation_images(&self.accumulation_images, self.default_sampler.inner());
+
             let blit_cmd_buf = vulkan_abstraction::CmdBuffer::new(Rc::clone(&self.core))?;
             let raytracing_cmd_buf = vulkan_abstraction::CmdBuffer::new(Rc::clone(&self.core))?;
 
@@ -316,6 +318,7 @@ impl Renderer {
 
         Ok(())
     }
+
 
     pub fn load_gltf(&mut self, path: &str) -> SrResult<()> {
         let gltf = vulkan_abstraction::gltf::Gltf::new(Rc::clone(&self.core), path)?;

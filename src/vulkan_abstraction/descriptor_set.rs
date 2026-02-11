@@ -241,6 +241,67 @@ impl DescriptorSets {
         })
     }
 
+    pub fn update_accumulation_images(
+        &self,
+        images: &[vulkan_abstraction::Image; 2],
+        sampler: vk::Sampler,
+    ) {
+        let device = self.core.device().inner();
+
+        // 1. Prepare Infos for History (Binding 5) - Read Only
+        // We act as if we are binding an array of 2 textures.
+        let history_infos = images
+            .iter()
+            .map(|img| {
+                vk::DescriptorImageInfo::default()
+                    .sampler(sampler)
+                    .image_view(img.image_view())
+                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            })
+            .collect::<Vec<_>>();
+
+        // 2. Prepare Infos for Accumulation (Binding 6) - General/Write
+        // We act as if we are binding an array of 2 storage images.
+        let accum_infos = images
+            .iter()
+            .map(|img| {
+                vk::DescriptorImageInfo::default()
+                    .image_view(img.image_view())
+                    .image_layout(vk::ImageLayout::GENERAL)
+            })
+            .collect::<Vec<_>>();
+
+        let mut writes = Vec::new();
+
+
+        for set in &self.descriptor_sets {
+            // Write Binding 5 (Array of 2 Textures)
+            writes.push(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(*set)
+                    .dst_binding(DescriptorSetLayout::HISTORY_BINDING)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .dst_array_element(0) // Start at index 0 of the array
+                    .image_info(&history_infos), // Contains 2 items
+            );
+
+
+            // Write Binding 6 (Array of 2 Images)
+            writes.push(
+                vk::WriteDescriptorSet::default()
+                    .dst_set(*set)
+                    .dst_binding(DescriptorSetLayout::ACCUMULATION_BINDING)
+                    .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                    .dst_array_element(0) // Start at index 0 of the array
+                    .image_info(&accum_infos), // Contains 2 items
+            );
+        }
+
+        unsafe {
+            device.update_descriptor_sets(&writes, &[]);
+        }
+    }
+
     pub fn inner(&self) -> &[vk::DescriptorSet] {
         &self.descriptor_sets
     }

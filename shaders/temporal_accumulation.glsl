@@ -29,7 +29,7 @@ uint frame_count
     // to see the noise disappear perfectly.
     float blend_factor = (frame_count == 0) ? 1.0 : (1.0 / float(frame_count + 1));
 
-    blend_factor = max(blend_factor, 0.01);
+    blend_factor = max(blend_factor, 0.1);
 
     return mix(history_color, current_color, blend_factor);
 }
