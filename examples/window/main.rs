@@ -267,7 +267,8 @@ impl App {
         let y = 13.0;
         let dist = 30.0;
         let camera = Camera::default()
-            .set_position(na::Point3::new(dist * time.cos(), y, dist * time.sin()))
+            .set_position(na::Point3::new(dist, y, dist))
+            //.set_position(na::Point3::new(dist * time.cos(), y, dist * time.sin()))
             .set_target(na::Point3::new(0.0, y, 0.0))
             .set_fov_y(45.0);
         self.res_mut().renderer.set_camera(camera)?;

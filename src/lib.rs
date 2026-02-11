@@ -361,23 +361,56 @@ impl Renderer {
     /// that will be signaled when the rendering is finished (which can be used to know when the Semaphore has no pending operations left).
     pub fn render_to_image(&mut self, dst_image: vk::Image, wait_sem: vk::Semaphore) -> SrResult<vk::Fence> {
         if !self.image_dependant_data.contains_key(&dst_image) {
-            self.build_image_dependent_data(&[dst_image])?; // gracefully handle cache misses
+            self.build_image_dependent_data(&[dst_image])?;
         }
+
+        // 1. Create raw pointer to self BEFORE the mutable borrow of the HashMap.
+        // This pointer allows us to bypass the borrow checker lock that 'img_dependent_data' will hold.
+        let this_ptr = self as *mut Self;
+
         let img_dependent_data = self.image_dependant_data.get_mut(&dst_image).unwrap();
 
-        // raytracing
+        // Raytracing
         img_dependent_data.raytracing_cmd_buf.fence_mut().wait()?;
 
-        self.core.queue().submit_async(
-            img_dependent_data.raytracing_cmd_buf.inner(),
-            &[],
-            &[],
-            &[],
-            img_dependent_data.raytracing_cmd_buf.fence_mut().submit()?,
-        )?;
+        let cmd_buf = img_dependent_data.raytracing_cmd_buf.inner();
+        let result_image = img_dependent_data.raytrace_result_image.inner();
+        let result_extent = img_dependent_data.raytrace_result_image.extent();
 
-        // blitting
-        // ALL_GRAPHICS is fine, since literally all graphics (both barriers and blit) have to wait for the image to be available
+        // HACK: Cast reference to raw pointer to 'launder' the lifetime.
+        // This prevents the compiler from seeing that we are passing a borrow of 'self' (via img_dependent_data)
+        // back into 'self' (via cmd_raytracing_render).
+        let descriptor_sets_ptr = &img_dependent_data.descriptor_sets as *const vulkan_abstraction::DescriptorSets;
+
+        unsafe {
+            // Use (*this_ptr).core because 'self.core' is locked by 'img_dependent_data'
+            let device = (*this_ptr).core.device().inner();
+
+            let begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+            device.begin_command_buffer(cmd_buf, &begin_info)?;
+
+            (*this_ptr).cmd_raytracing_render(
+                cmd_buf,
+                &*descriptor_sets_ptr, // Dereference back to reference
+                result_image,
+                result_extent,
+            )?;
+
+            device.end_command_buffer(cmd_buf)?;
+
+            // Submit using (*this_ptr)
+            (*this_ptr).core.queue().submit_async(
+                img_dependent_data.raytracing_cmd_buf.inner(),
+                &[],
+                &[],
+                &[],
+                img_dependent_data.raytracing_cmd_buf.fence_mut().submit()?,
+            )?;
+        }
+
+        // Blitting
         let (wait_sems, wait_dst_stages) = ([wait_sem], [vk::PipelineStageFlags::ALL_GRAPHICS]);
         let (wait_sems, wait_dst_stages) = if wait_sem == vk::Semaphore::null() {
             ([].as_slice(), [].as_slice())
@@ -387,13 +420,16 @@ impl Renderer {
 
         let signal_fence = img_dependent_data.blit_cmd_buf.fence_mut().submit()?;
 
-        self.core.queue().submit_async(
-            img_dependent_data.blit_cmd_buf.inner(),
-            &wait_sems,
-            &wait_dst_stages,
-            &[],
-            signal_fence,
-        )?;
+        unsafe {
+            // Again, use (*this_ptr) because img_dependent_data is still alive here
+            (*this_ptr).core.queue().submit_async(
+                img_dependent_data.blit_cmd_buf.inner(),
+                &wait_sems,
+                &wait_dst_stages,
+                &[],
+                signal_fence,
+            )?;
+        }
 
         Ok(signal_fence)
     }
@@ -422,6 +458,7 @@ impl Renderer {
         image: vk::Image,
         extent: vk::Extent3D,
     ) -> SrResult<()> {
+
         let device = self.core.device().inner();
         // Initializing push constant values
         let push_constants = vulkan_abstraction::PushConstant {
