@@ -5,7 +5,12 @@
 #include <shaders/common.glsl>
 #include <shaders/utils.glsl>
 
+#include <shaders/temporal_accumulation.glsl>
+
 layout(location = 0) rayPayloadEXT ray_payload_t prd;
+
+layout(set = 0, binding = 5) uniform sampler2D historyTexture;
+layout(set = 0, binding = 6, rgba32f) uniform image2D accumulationImage;
 
 uint seed;
 float rnd() {
@@ -32,7 +37,7 @@ vec3 get_random_bounce(vec3 normal) {
 void main() {
 
     vec3 total_radiance = vec3(0.0);
-    int SAMPLES = 1;
+    int SAMPLES = 50;
     init_rng(gl_LaunchIDEXT.xy, 1);
     for(int i = 0; i < SAMPLES; i++){
         const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
@@ -86,7 +91,30 @@ void main() {
 
     vec3 average_radiance = total_radiance / float(SAMPLES);
 
+    vec3 current_frame_color = total_radiance / float(SAMPLES);
 
+
+    // temporal accumulation logic
+
+    const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
+    const vec2 uv = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
+
+    //TODO no motion vectors, passing (0.0) for now
+    vec3 accumulated_color = perform_temporal_accumulation(
+    current_frame_color,
+    historyTexture,
+    uv,
+    vec2(0.0),
+    frame_count
+    );
+
+    imageStore(accumulationImage, ivec2(gl_LaunchIDEXT.xy), vec4(accumulated_color, 1.0));
+
+
+
+    // simple tone mapping (Reinhard) and Gamma Correction for the screen
+    vec3 display_color = accumulated_color / (accumulated_color + vec3(1.0));
+    display_color = pow(display_color, vec3(1.0/2.2));
     //output
     imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(average_radiance, 1.0));
 }

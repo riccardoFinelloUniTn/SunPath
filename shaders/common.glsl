@@ -56,6 +56,7 @@ struct mesh_info_t {
 
 layout(push_constant) uniform push_constant_t {
     bool use_srgb;
+    uint frame_count;
 };
 layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
 layout(set = 0, binding = 1, rgba8) uniform image2D image;

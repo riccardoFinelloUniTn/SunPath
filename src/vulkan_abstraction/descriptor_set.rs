@@ -18,7 +18,10 @@ impl DescriptorSetLayout {
     pub const MATRICES_UNIFORM_BUFFER_BINDING: u32 = 2;
     pub const MESHES_INFO_STORAGE_BUFFER_BINDING: u32 = 3;
     pub const SAMPLERS_BINDING: u32 = 4;
-    pub const NUMBER_OF_BINDINGS: usize = 5;
+    pub const HISTORY_BINDING: u32 = 5;
+    pub const ACCUMULATION_BINDING: u32 = 6;
+    pub const NUMBER_OF_BINDINGS: usize = 7;
+
 
     pub const NUMBER_OF_SAMPLERS: u32 = vulkan_abstraction::ShaderDataBuffers::NUMBER_OF_SAMPLERS as u32;
 
@@ -57,6 +60,18 @@ impl DescriptorSetLayout {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(Self::NUMBER_OF_SAMPLERS)
                 .stage_flags(vk::ShaderStageFlags::ALL),
+            // history read layout binding
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::HISTORY_BINDING)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(2)
+                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+            // accumulation write layout binding
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::ACCUMULATION_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(2)
+                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
         ];
 
         let descriptor_set_layout_create_info =
@@ -117,6 +132,14 @@ impl DescriptorSets {
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(DescriptorSetLayout::NUMBER_OF_SAMPLERS),
+            // 2 storage images (Output + accumulation)
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(2),
+
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(DescriptorSetLayout::NUMBER_OF_SAMPLERS + 1),
         ];
 
         let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo::default()

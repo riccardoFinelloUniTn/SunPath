@@ -52,6 +52,7 @@ pub struct Renderer {
     //used for temporal denoising/antialiasing
     //2 images to avoid race conditions when reading/writing
     pub accumulation_images: [vulkan_abstraction::Image; 2],
+    pub frame_count: u32,
 }
 
 impl Renderer {
@@ -188,6 +189,7 @@ impl Renderer {
                 image_format,
 
                 accumulation_images,
+                frame_count: 0,
 
                 fallback_texture_image,
                 fallback_texture_sampler,
@@ -225,7 +227,7 @@ impl Renderer {
             create_accum_image("Accumulation_1")?,
             create_accum_image("Accumulation_2")?,
         ];
-
+        self.frame_count = 0;
         Ok(())
     }
 
@@ -411,7 +413,7 @@ impl Renderer {
     }
 
     fn cmd_raytracing_render(
-        &self,
+        &mut self,
         cmd_buf: vk::CommandBuffer,
         descriptor_sets: &vulkan_abstraction::DescriptorSets,
         image: vk::Image,
@@ -420,10 +422,12 @@ impl Renderer {
         let device = self.core.device().inner();
         // Initializing push constant values
         let push_constants = vulkan_abstraction::PushConstant {
+            frame_count: self.frame_count,
             use_srgb: self.image_format == vk::Format::R8G8B8A8_SRGB,
             _padding: [0; 3],
         };
 
+        self.frame_count += 1;
         unsafe {
             vulkan_abstraction::cmd_image_memory_barrier(
                 &self.core,

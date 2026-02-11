@@ -11,6 +11,7 @@ const SHADER_ENTRY_POINT: &CStr = c"main";
 #[allow(dead_code)] // read by the gpu
 #[repr(C, packed)]
 pub struct PushConstant {
+    pub frame_count: u32,
     pub use_srgb: bool,
     pub _padding: [u8; 3], //push constant size must be a multiple of 4
 }
