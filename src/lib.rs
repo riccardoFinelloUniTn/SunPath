@@ -259,28 +259,7 @@ impl Renderer {
 
             let blit_cmd_buf = vulkan_abstraction::CmdBuffer::new(Rc::clone(&self.core))?;
             let raytracing_cmd_buf = vulkan_abstraction::CmdBuffer::new(Rc::clone(&self.core))?;
-
-            // record raytracing
-            {
-                let cmd_buf_begin_info =
-                    vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE);
-
-                unsafe {
-                    self.core
-                        .device()
-                        .inner()
-                        .begin_command_buffer(raytracing_cmd_buf.inner(), &cmd_buf_begin_info)
-                }?;
-
-                self.cmd_raytracing_render(
-                    raytracing_cmd_buf.inner(),
-                    &descriptor_sets,
-                    raytrace_result_image.inner(),
-                    raytrace_result_image.extent(),
-                )?;
-
-                unsafe { self.core.device().inner().end_command_buffer(raytracing_cmd_buf.inner()) }?;
-            }
+            
 
             //record blit
             {
@@ -460,6 +439,26 @@ impl Renderer {
     ) -> SrResult<()> {
 
         let device = self.core.device().inner();
+
+        //ping pong to avoid errors when using accumulation images
+        let history_idx = (self.frame_count % 2) as usize;
+        let accum_idx = ((self.frame_count + 1) % 2) as usize;
+
+
+        if self.frame_count == 0 {
+            println!("DEBUG: Frame 0 Barrier Setup");
+            println!("  Swapchain Image: {:?}", image);
+            println!("  History Image (idx {}): {:?}", history_idx, self.accumulation_images[history_idx].inner());
+            println!("  Accum Image   (idx {}): {:?}", accum_idx, self.accumulation_images[accum_idx].inner());
+        }
+
+        // Use GENERAL for everything to rule out layout mismatches
+        let (old_layout, src_stage, src_access) = if self.frame_count == 0 {
+            (vk::ImageLayout::UNDEFINED, vk::PipelineStageFlags::TOP_OF_PIPE, vk::AccessFlags::empty())
+        } else {
+            (vk::ImageLayout::GENERAL, vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR, vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::SHADER_READ)
+        };
+
         // Initializing push constant values
         let push_constants = vulkan_abstraction::PushConstant {
             frame_count: self.frame_count,
@@ -469,17 +468,63 @@ impl Renderer {
 
         self.frame_count += 1;
         unsafe {
-            vulkan_abstraction::cmd_image_memory_barrier(
-                &self.core,
-                cmd_buf,
+            let subresource_range = vk::ImageSubresourceRange::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .base_mip_level(0)
+                .level_count(vk::REMAINING_MIP_LEVELS)
+                .base_array_layer(0)
+                .layer_count(vk::REMAINING_ARRAY_LAYERS);
+
+            let make_barrier = |img: vk::Image, old: vk::ImageLayout, new: vk::ImageLayout, src_a, dst_a| {
+                vk::ImageMemoryBarrier::default()
+                    .src_access_mask(src_a)
+                    .dst_access_mask(dst_a)
+                    .old_layout(old)
+                    .new_layout(new)
+                    .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                    .image(img)
+                    .subresource_range(subresource_range)
+            };
+
+            // Barrier 1: Swapchain
+            let b_swap = make_barrier(
                 image,
-                vk::PipelineStageFlags::TOP_OF_PIPE, //wait nothing
-                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                vk::AccessFlags::empty(),      //no writes to flush out
-                vk::AccessFlags::SHADER_WRITE, //maybe also shader read is needed
-                vk::ImageLayout::UNDEFINED,    //input is garbage
-                vk::ImageLayout::GENERAL,      //great for flexibility, and it should have good performance in all cases
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::GENERAL,
+                vk::AccessFlags::empty(),
+                vk::AccessFlags::SHADER_WRITE
             );
+
+            // Barrier 2: History (Targeting GENERAL)
+            let b_hist = make_barrier(
+                self.accumulation_images[history_idx].inner(),
+                old_layout,
+                vk::ImageLayout::GENERAL,
+                src_access,
+                vk::AccessFlags::SHADER_READ
+            );
+
+            // Barrier 3: Accum (Targeting GENERAL)
+            let b_accum = make_barrier(
+                self.accumulation_images[accum_idx].inner(),
+                old_layout,
+                vk::ImageLayout::GENERAL,
+                src_access,
+                vk::AccessFlags::SHADER_WRITE
+            );
+
+            device.cmd_pipeline_barrier(
+                cmd_buf,
+                // On frame 0, we MUST wait for TOP_OF_PIPE. Later, we wait for the RayTracing shader.
+                if self.frame_count == 1 { vk::PipelineStageFlags::TOP_OF_PIPE } else { vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR },
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[b_swap, b_hist, b_accum],
+            );
+
 
             device.cmd_bind_pipeline(
                 cmd_buf,

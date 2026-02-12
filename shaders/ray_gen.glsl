@@ -9,8 +9,10 @@
 
 layout(location = 0) rayPayloadEXT ray_payload_t prd;
 
-layout(set = 0, binding = 5) uniform sampler2D historyTexture;
-layout(set = 0, binding = 6, rgba32f) uniform image2D accumulationImage;
+
+
+layout(set = 0, binding = 5) uniform sampler2D historyTextures[2];
+layout(set = 0, binding = 6, rgba32f) uniform image2D accumulationImages[2];
 
 uint seed;
 float rnd() {
@@ -94,27 +96,42 @@ void main() {
     vec3 current_frame_color = total_radiance / float(SAMPLES);
 
 
-    // temporal accumulation logic
+    uint history_idx = frame_count % 2;
+    uint accum_idx = (frame_count + 1) % 2;
+    // ----------------------
 
+    // temporal accumulation logic
     const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
     const vec2 uv = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
 
-    //TODO no motion vectors, passing (0.0) for now
-    vec3 accumulated_color = perform_temporal_accumulation(
-    current_frame_color,
-    historyTexture,
-    uv,
-    vec2(0.0),
-    frame_count
-    );
+    // DEBUG: History Read Test
+    // Now 'historyTextures' and 'history_idx' are defined, so this works:
+    vec3 history_debug = texture(historyTextures[history_idx], uv).rgb;
 
-    imageStore(accumulationImage, ivec2(gl_LaunchIDEXT.xy), vec4(accumulated_color, 1.0));
+    vec3 history_color;
+
+    if (frame_count == 0) {
+        // Frame 0: No history exists yet. Use current color or black.
+        history_color = current_frame_color;
+    } else {
+        // Frame > 0: Safe to read history
+        history_color = texture(historyTextures[history_idx], uv).rgb;
+    }
+
+    // Debug Output
+    imageStore(accumulationImages[accum_idx], ivec2(gl_LaunchIDEXT.xy), vec4(history_color, 1.0));
+
+
+    // ...
+
+    //imageStore(accumulationImage, ivec2(gl_LaunchIDEXT.xy), vec4(accumulated_color, 1.0));
 
 
 
     // simple tone mapping (Reinhard) and Gamma Correction for the screen
-    vec3 display_color = accumulated_color / (accumulated_color + vec3(1.0));
-    display_color = pow(display_color, vec3(1.0/2.2));
+    //vec3 display_color = accumulated_color / (accumulated_color + vec3(1.0));
+    //display_color = pow(display_color, vec3(1.0/2.2));
     //output
-    imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(average_radiance, 1.0));
+
+    //imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(average_radiance, 1.0));
 }
