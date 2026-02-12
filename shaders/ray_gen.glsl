@@ -40,7 +40,7 @@ void main() {
 
     vec3 total_radiance = vec3(0.0);
     int SAMPLES = 1;
-    init_rng(gl_LaunchIDEXT.xy, 1);
+    init_rng(gl_LaunchIDEXT.xy, frame_count);
     for(int i = 0; i < SAMPLES; i++){
         const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
         const vec2 inUV = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
@@ -78,8 +78,14 @@ void main() {
 
             if (bounce > 2) {
                 float p = max(throughput.r, max(throughput.g, throughput.b));
+
                 if (rnd() > p) break;
-                throughput /= p;
+
+                if (p > 0.001) {
+                    throughput /= p;
+                } else {
+                    break;
+                }
             }
 
             //bounce
@@ -90,8 +96,6 @@ void main() {
         total_radiance += radiance;
 
     }
-
-    vec3 average_radiance = total_radiance / float(SAMPLES);
 
     vec3 current_frame_color = total_radiance / float(SAMPLES);
 
@@ -104,34 +108,22 @@ void main() {
     const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
     const vec2 uv = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
 
-    // DEBUG: History Read Test
-    // Now 'historyTextures' and 'history_idx' are defined, so this works:
-    vec3 history_debug = texture(historyTextures[history_idx], uv).rgb;
 
     vec3 history_color;
 
     if (frame_count == 0) {
-        // Frame 0: No history exists yet. Use current color or black.
+
+        //history_color = vec3(1.0, 0.0,0.0);
         history_color = current_frame_color;
     } else {
-        // Frame > 0: Safe to read history
         history_color = texture(historyTextures[history_idx], uv).rgb;
+        //history_color = vec3(0.0, 0.0,1.0);
     }
 
-    // Debug Output
-    imageStore(accumulationImages[accum_idx], ivec2(gl_LaunchIDEXT.xy), vec4(history_color, 1.0));
+    vec3 accumulated_color = (history_color + current_frame_color) / 2;
 
+    //current_frame_color = vec3(0.0, 1.0, 0.0);
+    imageStore(accumulationImages[accum_idx], ivec2(gl_LaunchIDEXT.xy), vec4(current_frame_color, 1.0));
 
-    // ...
-
-    //imageStore(accumulationImage, ivec2(gl_LaunchIDEXT.xy), vec4(accumulated_color, 1.0));
-
-
-
-    // simple tone mapping (Reinhard) and Gamma Correction for the screen
-    //vec3 display_color = accumulated_color / (accumulated_color + vec3(1.0));
-    //display_color = pow(display_color, vec3(1.0/2.2));
-    //output
-
-    //imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(average_radiance, 1.0));
+    imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(accumulated_color, 1.0));
 }

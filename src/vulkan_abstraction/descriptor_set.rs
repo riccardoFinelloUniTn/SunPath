@@ -220,7 +220,7 @@ impl DescriptorSets {
                 vk::DescriptorImageInfo::default()
                     .sampler(*sampler)
                     .image_view(*image_view)
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image_layout(vk::ImageLayout::GENERAL)
             })
             .collect::<Vec<_>>();
 

@@ -21,7 +21,7 @@ struct ImageDependentData {
     raytrace_result_image: vulkan_abstraction::Image,
 
     #[allow(unused)]
-    descriptor_sets: vulkan_abstraction::DescriptorSets,
+    pub descriptor_sets: vulkan_abstraction::DescriptorSets,
 }
 
 pub type CreateSurfaceFn = dyn Fn(&ash::Entry, &ash::Instance) -> SrResult<vk::SurfaceKHR>;
@@ -204,6 +204,8 @@ impl Renderer {
     }
 
     pub fn resize(&mut self, image_extent: (u32, u32)) -> SrResult<()> {
+
+
         let new_extent = utils::tuple_to_extent3d(image_extent);
         if new_extent == self.image_extent {
             return Ok(());
@@ -223,11 +225,15 @@ impl Renderer {
             )
         };
 
+
         self.accumulation_images = [
             create_accum_image("Accumulation_1")?,
             create_accum_image("Accumulation_2")?,
         ];
+
         self.frame_count = 0;
+
+        //self.image_dependant_data
         Ok(())
     }
 
@@ -339,12 +345,12 @@ impl Renderer {
     /// ready to be written to (for example after being acquired from a swapchain) and a Fence will be returned
     /// that will be signaled when the rendering is finished (which can be used to know when the Semaphore has no pending operations left).
     pub fn render_to_image(&mut self, dst_image: vk::Image, wait_sem: vk::Semaphore) -> SrResult<vk::Fence> {
+
+
         if !self.image_dependant_data.contains_key(&dst_image) {
             self.build_image_dependent_data(&[dst_image])?;
         }
 
-        // 1. Create raw pointer to self BEFORE the mutable borrow of the HashMap.
-        // This pointer allows us to bypass the borrow checker lock that 'img_dependent_data' will hold.
         let this_ptr = self as *mut Self;
 
         let img_dependent_data = self.image_dependant_data.get_mut(&dst_image).unwrap();
@@ -356,10 +362,8 @@ impl Renderer {
         let result_image = img_dependent_data.raytrace_result_image.inner();
         let result_extent = img_dependent_data.raytrace_result_image.extent();
 
-        // HACK: Cast reference to raw pointer to 'launder' the lifetime.
-        // This prevents the compiler from seeing that we are passing a borrow of 'self' (via img_dependent_data)
-        // back into 'self' (via cmd_raytracing_render).
         let descriptor_sets_ptr = &img_dependent_data.descriptor_sets as *const vulkan_abstraction::DescriptorSets;
+
 
         unsafe {
             // Use (*this_ptr).core because 'self.core' is locked by 'img_dependent_data'
@@ -468,6 +472,12 @@ impl Renderer {
 
         self.frame_count += 1;
         unsafe {
+
+            println!("--- Frame {} ---", self.frame_count);
+            println!("History Index: {}, Accum Index: {}", history_idx, accum_idx);
+            println!("Old Layout Variable: {:?}", old_layout);
+            println!("Src Access Variable: {:?}", src_access);
+
             let subresource_range = vk::ImageSubresourceRange::default()
                 .aspect_mask(vk::ImageAspectFlags::COLOR)
                 .base_mip_level(0)
@@ -496,27 +506,39 @@ impl Renderer {
                 vk::AccessFlags::SHADER_WRITE
             );
 
+            let (hist_old, hist_src) = if self.frame_count == 1 {
+                (vk::ImageLayout::UNDEFINED, vk::AccessFlags::empty())
+            } else {
+                (vk::ImageLayout::GENERAL, vk::AccessFlags::SHADER_WRITE)
+            };
+
             // Barrier 2: History (Targeting GENERAL)
             let b_hist = make_barrier(
                 self.accumulation_images[history_idx].inner(),
-                old_layout,
+                hist_old,
                 vk::ImageLayout::GENERAL,
-                src_access,
+                hist_src,
                 vk::AccessFlags::SHADER_READ
             );
+
+            let (accum_old, accum_src) = if self.frame_count == 1 {
+                (vk::ImageLayout::UNDEFINED, vk::AccessFlags::empty())
+            } else {
+                (vk::ImageLayout::GENERAL, vk::AccessFlags::SHADER_READ)
+            };
 
             // Barrier 3: Accum (Targeting GENERAL)
             let b_accum = make_barrier(
                 self.accumulation_images[accum_idx].inner(),
-                old_layout,
+                accum_old,
                 vk::ImageLayout::GENERAL,
-                src_access,
+                accum_src,
                 vk::AccessFlags::SHADER_WRITE
             );
 
             device.cmd_pipeline_barrier(
                 cmd_buf,
-                // On frame 0, we MUST wait for TOP_OF_PIPE. Later, we wait for the RayTracing shader.
+                // Frame 1: Wait for nothing. Frame 2+: Wait for previous Ray Tracing.
                 if self.frame_count == 1 { vk::PipelineStageFlags::TOP_OF_PIPE } else { vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR },
                 vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
                 vk::DependencyFlags::empty(),
