@@ -120,10 +120,10 @@ void main() {
         //history_color = vec3(0.0, 0.0,1.0);
     }
 
-    vec3 accumulated_color = (history_color + current_frame_color) / 2;
+    vec3 accumulated_color = mix(history_color, current_frame_color, 0.1);
 
     //current_frame_color = vec3(0.0, 1.0, 0.0);
-    imageStore(accumulationImages[accum_idx], ivec2(gl_LaunchIDEXT.xy), vec4(current_frame_color, 1.0));
+    imageStore(accumulationImages[accum_idx], ivec2(gl_LaunchIDEXT.xy), vec4(accumulated_color, 1.0));
 
     imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(accumulated_color, 1.0));
 }

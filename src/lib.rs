@@ -470,6 +470,7 @@ impl Renderer {
             _padding: [0; 3],
         };
 
+
         self.frame_count += 1;
         unsafe {
 
