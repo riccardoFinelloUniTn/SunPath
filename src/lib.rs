@@ -19,6 +19,8 @@ struct ImageDependentData {
     pub blit_cmd_buf: vulkan_abstraction::CmdBuffer,
     #[allow(unused)]
     raytrace_result_image: vulkan_abstraction::Image,
+    #[allow(unused)]
+    denoise_result_image: vulkan_abstraction::Image,
 
     #[allow(unused)]
     pub descriptor_sets: vulkan_abstraction::DescriptorSets,
@@ -42,6 +44,8 @@ pub struct Renderer {
     descriptor_set_layout: vulkan_abstraction::DescriptorSetLayout,
     image_extent: vk::Extent3D,
     image_format: vk::Format,
+
+    denoise_pipeline: vulkan_abstraction::DenoisePipeline,
 
     fallback_texture_image: vulkan_abstraction::Image,
     fallback_texture_sampler: vulkan_abstraction::Sampler,
@@ -103,6 +107,10 @@ impl Renderer {
             Rc::clone(&core),
             &descriptor_set_layout,
             env_var_as_bool(ENABLE_SHADER_DEBUG_SYMBOLS_ENV_VAR).unwrap_or(IS_DEBUG_BUILD),
+        )?;
+
+        let denoise_pipeline = vulkan_abstraction::DenoisePipeline::new(
+            Rc::clone(&core),
         )?;
 
         let shader_binding_table = vulkan_abstraction::ShaderBindingTable::new(&core, &ray_tracing_pipeline)?;
@@ -188,6 +196,8 @@ impl Renderer {
                 image_extent,
                 image_format,
 
+                denoise_pipeline,
+
                 accumulation_images,
                 frame_count: 0,
 
@@ -253,6 +263,16 @@ impl Renderer {
                 "sunray (internal, pre-blit) raytrace result image",
             )?;
 
+            let denoise_result_image = vulkan_abstraction::Image::new(
+                Rc::clone(&self.core),
+                self.image_extent,
+                vk::Format::R8G8B8A8_UNORM,
+                vk::ImageTiling::OPTIMAL,
+                gpu_allocator::MemoryLocation::GpuOnly,
+                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+                "sunray (internal, pre-blit) denoise result image",
+            )?;
+
             let descriptor_sets = vulkan_abstraction::DescriptorSets::new(
                 Rc::clone(&self.core),
                 &self.descriptor_set_layout,
@@ -294,6 +314,7 @@ impl Renderer {
                 *post_blit_image,
                 ImageDependentData {
                     raytrace_result_image,
+                    denoise_result_image,
                     raytracing_cmd_buf,
                     blit_cmd_buf,
                     descriptor_sets,
@@ -360,6 +381,7 @@ impl Renderer {
 
         let cmd_buf = img_dependent_data.raytracing_cmd_buf.inner();
         let result_image = img_dependent_data.raytrace_result_image.inner();
+        let denoised_image = img_dependent_data.denoise_result_image.inner();
         let result_extent = img_dependent_data.raytrace_result_image.extent();
 
         let descriptor_sets_ptr = &img_dependent_data.descriptor_sets as *const vulkan_abstraction::DescriptorSets;
@@ -381,7 +403,17 @@ impl Renderer {
                 result_extent,
             )?;
 
+            (*this_ptr).cmd_denoise_image(
+                cmd_buf,
+                &*descriptor_sets_ptr,
+                result_extent.width,
+                result_extent.height,
+                result_image,
+                denoised_image,
+            )?;
+
             device.end_command_buffer(cmd_buf)?;
+
 
             // Submit using (*this_ptr)
             (*this_ptr).core.queue().submit_async(
@@ -392,6 +424,7 @@ impl Renderer {
                 img_dependent_data.raytracing_cmd_buf.fence_mut().submit()?,
             )?;
         }
+
 
         // Blitting
         let (wait_sems, wait_dst_stages) = ([wait_sem], [vk::PipelineStageFlags::ALL_GRAPHICS]);
@@ -575,6 +608,113 @@ impl Renderer {
         Ok(())
     }
 
+    fn cmd_denoise_image(
+        &self,
+        cmd_buf: vk::CommandBuffer,
+        descriptor_sets: &vulkan_abstraction::DescriptorSets,
+        width: u32,
+        height: u32,
+        input_image:  vk::Image,
+        output_image:  vk::Image,
+    ) -> SrResult<()> {
+        let device = self.core.device().inner();
+
+        let input_barrier = vk::ImageMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE) // RT wrote to it
+            .dst_access_mask(vk::AccessFlags::SHADER_READ)  // Denoise reads it
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .image(input_image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+
+        // Ensure the output image is ready to be written to
+        let output_barrier = vk::ImageMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::empty())      // Don't care what it was before
+            .dst_access_mask(vk::AccessFlags::SHADER_WRITE) // Denoise writes to it
+            .old_layout(vk::ImageLayout::UNDEFINED)         // Discard previous content
+            .new_layout(vk::ImageLayout::GENERAL)
+            .image(output_image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+
+
+
+        unsafe{
+            device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR, // Wait for RT
+                vk::PipelineStageFlags::COMPUTE_SHADER,         // Block Compute
+                vk::DependencyFlags::empty(),
+                &[], &[],
+                &[input_barrier, output_barrier]
+            );
+
+            device.cmd_bind_pipeline(
+                cmd_buf,
+                vk::PipelineBindPoint::COMPUTE,
+                self.denoise_pipeline.inner(),
+            );
+
+            device.cmd_bind_descriptor_sets(
+                cmd_buf,
+                vk::PipelineBindPoint::COMPUTE,
+                self.denoise_pipeline.layout(),
+                0,
+                descriptor_sets.inner(),
+                &[],
+            );
+        }
+
+
+
+
+        let group_x = (width + 15) / 16;
+        let group_y = (height + 15) / 16;
+        unsafe {
+            device.cmd_dispatch(cmd_buf, group_x, group_y, 1);
+        }
+
+
+        let post_barrier = vk::ImageMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE) // Denoise wrote it
+            .dst_access_mask(vk::AccessFlags::TRANSFER_READ) // Blit reads it
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL) // Optimization for blit
+            .image(output_image)
+            .subresource_range(vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                base_mip_level: 0,
+                level_count: 1,
+                base_array_layer: 0,
+                layer_count: 1,
+            });
+
+        unsafe {
+            device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::COMPUTE_SHADER, // Wait for Denoise
+                vk::PipelineStageFlags::TRANSFER,       // Block Transfer (Blit)
+                vk::DependencyFlags::empty(),
+                &[], &[],
+                &[post_barrier]
+            );
+        }
+
+
+        Ok(())
+
+    }
     fn cmd_blit_image(
         core: &vulkan_abstraction::Core,
         cmd_buf: vk::CommandBuffer,
