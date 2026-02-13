@@ -43,8 +43,12 @@ struct material_t {
     uint32_t normal_texture_index;
     uint32_t occlusion_texture_index;
 
-    vec3 emissive_factor;
+    vec4 emissive_factor;
     uint32_t emissive_texture_index;
+
+    uint alpha_mode;
+    float alpha_cutoff;
+    uint _end_padding;
 };
 
 struct mesh_info_t {
