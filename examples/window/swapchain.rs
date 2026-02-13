@@ -123,11 +123,7 @@ impl Swapchain {
 
             s
         };
-
-        log::debug!(
-            "built swapchain {{ handle: {swapchain:#x?}, extent: {image_extent:?}, images: {} }}",
-            fmt_handles(&images)
-        );
+        
 
         let image_views = images
             .iter()

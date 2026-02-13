@@ -449,13 +449,6 @@ impl Renderer {
         let accum_idx = ((self.frame_count + 1) % 2) as usize;
 
 
-        if self.frame_count == 0 {
-            println!("DEBUG: Frame 0 Barrier Setup");
-            println!("  Swapchain Image: {:?}", image);
-            println!("  History Image (idx {}): {:?}", history_idx, self.accumulation_images[history_idx].inner());
-            println!("  Accum Image   (idx {}): {:?}", accum_idx, self.accumulation_images[accum_idx].inner());
-        }
-
         // Use GENERAL for everything to rule out layout mismatches
         let (old_layout, src_stage, src_access) = if self.frame_count == 0 {
             (vk::ImageLayout::UNDEFINED, vk::PipelineStageFlags::TOP_OF_PIPE, vk::AccessFlags::empty())
@@ -473,11 +466,6 @@ impl Renderer {
 
         self.frame_count += 1;
         unsafe {
-
-            println!("--- Frame {} ---", self.frame_count);
-            println!("History Index: {}, Accum Index: {}", history_idx, accum_idx);
-            println!("Old Layout Variable: {:?}", old_layout);
-            println!("Src Access Variable: {:?}", src_access);
 
             let subresource_range = vk::ImageSubresourceRange::default()
                 .aspect_mask(vk::ImageAspectFlags::COLOR)
