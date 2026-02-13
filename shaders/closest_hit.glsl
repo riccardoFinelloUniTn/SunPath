@@ -37,15 +37,23 @@ void main() {
     // Texture sampling
 
     vec4 base_color = sample_texture(material.base_color_texture_index, uv, material.base_color_value);
-    vec3 emissive   = sample_texture(material.emissive_texture_index, uv, vec4(material.emissive_factor, 0.0)).xyz;
+    vec3 emissive_factor_rgb = material.emissive_factor.rgb;
+    float emissive_strength  = material.emissive_factor.w;
 
+    vec4 emissive_sample = sample_texture(
+    material.emissive_texture_index,
+    uv,
+    vec4(emissive_factor_rgb, 1.0)
+    );
+
+    vec3 final_emission = emissive_sample.rgb * emissive_strength;
     // Transform to World Space
     vec3 world_normal = normalize(vec3(normal * gl_WorldToObjectEXT));
 
     // payload
     payload.albedo   = base_color.rgb;
     payload.normal   = world_normal;
-    payload.emission = emissive;
+    payload.emission = final_emission;
     payload.dist     = gl_HitTEXT;
     payload.type     = 0; // 0 = Hit Object
 }

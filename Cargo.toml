@@ -13,7 +13,7 @@ exclude = ["examples/assets/Lantern.glb", "examples/.gitignore", ".gitignore"]
 [dependencies]
 ash = { version = "0.38.0", features = ["linked"] }
 nalgebra = "0.34"
-gltf = { version = "1.4.1", features = ["KHR_lights_punctual"]}
+gltf = { version = "1.4.1", features = ["KHR_lights_punctual", "KHR_materials_emissive_strength"] }
 log = { version = "0.4.28", features = ["release_max_level_warn"] }
 gpu-allocator = "0.28.0"
 bytemuck = "1.24.0"

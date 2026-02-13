@@ -1,3 +1,5 @@
+use gltf::json::extensions::material::EmissiveStrength;
+
 #[derive(Clone)]
 pub struct PbrMetallicRoughnessProperties {
     pub base_color_factor: [f32; 4],
@@ -13,6 +15,7 @@ pub struct Material {
     pub normal_texture_index: Option<usize>,
     pub occlusion_texture_index: Option<usize>,
     pub emissive_factor: [f32; 3],
+    pub emissive_strength: f32,
     pub emissive_texture_index: Option<usize>,
     pub alpha_mode: gltf::material::AlphaMode,
     pub alpha_cutoff: f32,

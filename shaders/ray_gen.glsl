@@ -39,7 +39,7 @@ vec3 get_random_bounce(vec3 normal) {
 void main() {
 
     vec3 total_radiance = vec3(0.0);
-    int SAMPLES = 1;
+    int SAMPLES = 5;
     init_rng(gl_LaunchIDEXT.xy, frame_count);
     for(int i = 0; i < SAMPLES; i++){
         const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);

@@ -218,6 +218,7 @@ impl Gltf {
                 let metallic_factor = material_pbr.metallic_factor();
                 let roughness_factor = material_pbr.roughness_factor();
                 let emissive_factor = material.emissive_factor();
+                let emissive_strength = material.emissive_strength().unwrap_or(0.0);
                 let alpha_mode = material.alpha_mode();
                 let alpha_cutoff = material.alpha_cutoff().unwrap_or(0.5);
                 let double_sided = material.double_sided();
@@ -245,6 +246,7 @@ impl Gltf {
                     normal_texture_index,
                     occlusion_texture_index,
                     emissive_factor,
+                    emissive_strength,
                     emissive_texture_index,
                     alpha_mode,
                     alpha_cutoff,

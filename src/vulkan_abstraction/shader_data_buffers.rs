@@ -27,9 +27,13 @@ struct Material {
 
     _padding: [f32; 2],
 
-    emissive_factor: [f32; 3],
+    //rgb + strength
+    emissive_factor: [f32; 4],
     emissive_texture_index: u32,
-    //alpha mode and alpha cutoff are missing
+
+    pub alpha_mode: u32,   // 4 bytes
+    pub alpha_cutoff: f32, // 4 bytes
+    pub _end_padding: u32,
 }
 impl Material {
     const NULL_TEXTURE_INDEX: u32 = u32::MAX;
@@ -57,9 +61,17 @@ impl From<&vulkan_abstraction::gltf::Material> for Material {
             normal_texture_index: to_texture_index(material.normal_texture_index),
             occlusion_texture_index: to_texture_index(material.occlusion_texture_index),
 
-            emissive_factor: material.emissive_factor,
+            emissive_factor: [
+                material.emissive_factor[0],
+                material.emissive_factor[1],
+                material.emissive_factor[2],
+                material.emissive_strength
+            ],
             emissive_texture_index: to_texture_index(material.emissive_texture_index),
 
+            alpha_mode: 0,
+            alpha_cutoff: 0.0,
+            _end_padding: 0,
             _padding: [0.0; 2],
         }
     }
