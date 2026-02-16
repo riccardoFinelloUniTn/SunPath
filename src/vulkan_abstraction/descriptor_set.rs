@@ -6,13 +6,13 @@ use crate::{error::*, vulkan_abstraction};
 
 use vulkan_abstraction::TLAS;
 
-pub struct DescriptorSetLayout {
+pub struct RaytracingDescriptorSetLayout {
     descriptor_set_layout: vk::DescriptorSetLayout,
 
     core: Rc<vulkan_abstraction::Core>,
 }
 
-impl DescriptorSetLayout {
+impl RaytracingDescriptorSetLayout {
     pub const TLAS_BINDING: u32 = 0;
     pub const OUTPUT_IMAGE_BINDING: u32 = 1;
     pub const MATRICES_UNIFORM_BUFFER_BINDING: u32 = 2;
@@ -89,7 +89,7 @@ impl DescriptorSetLayout {
         self.descriptor_set_layout
     }
 }
-impl Drop for DescriptorSetLayout {
+impl Drop for RaytracingDescriptorSetLayout {
     fn drop(&mut self) {
         unsafe {
             self.core
@@ -100,17 +100,72 @@ impl Drop for DescriptorSetLayout {
     }
 }
 
-pub(crate) struct DescriptorSets {
+pub struct DenoiseDescriptorSetLayout {
+    descriptor_set_layout: vk::DescriptorSetLayout,
+    core: Rc<vulkan_abstraction::Core>,
+}
+
+impl DenoiseDescriptorSetLayout {
+    pub const INPUT_IMAGE_BINDING: u32 = 0;
+    pub const OUTPUT_IMAGE_BINDING: u32 = 1;
+
+    pub fn new(core: Rc<vulkan_abstraction::Core>) -> SrResult<Self> {
+        let device = core.device().inner();
+
+        let bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::INPUT_IMAGE_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE), // Denoising happens in Compute
+
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::OUTPUT_IMAGE_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+        ];
+
+        let create_info = vk::DescriptorSetLayoutCreateInfo::default()
+            .bindings(&bindings);
+
+        let descriptor_set_layout = unsafe {
+            device.create_descriptor_set_layout(&create_info, None)?
+        };
+
+        Ok(Self {
+            descriptor_set_layout,
+            core,
+        })
+    }
+
+    pub fn inner(&self) -> vk::DescriptorSetLayout {
+        self.descriptor_set_layout
+    }
+}
+
+impl Drop for DenoiseDescriptorSetLayout {
+    fn drop(&mut self) {
+        unsafe {
+            self.core
+            .device()
+            .inner()
+            .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+        }
+    }
+}
+
+pub(crate) struct RaytracingDescriptorSets {
     descriptor_sets: Vec<vk::DescriptorSet>,
     descriptor_pool: vk::DescriptorPool,
 
     core: Rc<vulkan_abstraction::Core>,
 }
 
-impl DescriptorSets {
+impl RaytracingDescriptorSets {
     pub fn new(
         core: Rc<vulkan_abstraction::Core>,
-        descriptor_set_layout: &vulkan_abstraction::DescriptorSetLayout,
+        descriptor_set_layout: &vulkan_abstraction::RaytracingDescriptorSetLayout,
         tlas: &TLAS,
         output_image_view: vk::ImageView,
         shader_data: &vulkan_abstraction::ShaderDataBuffers,
@@ -131,7 +186,7 @@ impl DescriptorSets {
                 .descriptor_count(1),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(DescriptorSetLayout::NUMBER_OF_SAMPLERS),
+                .descriptor_count(RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS),
             // 2 storage images (Output + accumulation)
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_IMAGE)
@@ -139,7 +194,7 @@ impl DescriptorSets {
 
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(DescriptorSetLayout::NUMBER_OF_SAMPLERS + 1),
+                .descriptor_count(RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS + 1),
         ];
 
         let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo::default()
@@ -168,7 +223,7 @@ impl DescriptorSets {
                 .push_next(&mut write_descriptor_set_acceleration_structure)
                 .descriptor_count(1)
                 .dst_set(descriptor_sets[0])
-                .dst_binding(DescriptorSetLayout::TLAS_BINDING),
+                .dst_binding(RaytracingDescriptorSetLayout::TLAS_BINDING),
         );
 
         // write image to descriptor set
@@ -180,7 +235,7 @@ impl DescriptorSets {
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(&descriptor_image_infos)
                 .dst_set(descriptor_sets[0])
-                .dst_binding(DescriptorSetLayout::OUTPUT_IMAGE_BINDING),
+                .dst_binding(RaytracingDescriptorSetLayout::OUTPUT_IMAGE_BINDING),
         );
 
         // write matrices uniform buffer to descriptor set
@@ -192,7 +247,7 @@ impl DescriptorSets {
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                 .buffer_info(&descriptor_buffer_infos)
                 .dst_set(descriptor_sets[0])
-                .dst_binding(DescriptorSetLayout::MATRICES_UNIFORM_BUFFER_BINDING),
+                .dst_binding(RaytracingDescriptorSetLayout::MATRICES_UNIFORM_BUFFER_BINDING),
         );
 
         // write meshes info uniform buffer to descriptor set
@@ -204,13 +259,13 @@ impl DescriptorSets {
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .buffer_info(&descriptor_buffer_infos)
                 .dst_set(descriptor_sets[0])
-                .dst_binding(DescriptorSetLayout::MESHES_INFO_STORAGE_BUFFER_BINDING),
+                .dst_binding(RaytracingDescriptorSetLayout::MESHES_INFO_STORAGE_BUFFER_BINDING),
         );
 
         // write samplers to descriptor set
         assert_eq!(
             shader_data.get_textures().len(),
-            DescriptorSetLayout::NUMBER_OF_SAMPLERS as usize
+            RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS as usize
         );
 
         let descriptor_sampler_infos = shader_data
@@ -229,7 +284,7 @@ impl DescriptorSets {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(&descriptor_sampler_infos)
                 .dst_set(descriptor_sets[0])
-                .dst_binding(DescriptorSetLayout::SAMPLERS_BINDING),
+                .dst_binding(RaytracingDescriptorSetLayout::SAMPLERS_BINDING),
         );
 
         unsafe { device.update_descriptor_sets(&descriptor_writes, &[]) };
@@ -279,7 +334,7 @@ impl DescriptorSets {
             writes.push(
                 vk::WriteDescriptorSet::default()
                     .dst_set(*set)
-                    .dst_binding(DescriptorSetLayout::HISTORY_BINDING)
+                    .dst_binding(RaytracingDescriptorSetLayout::HISTORY_BINDING)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .dst_array_element(0) // Start at index 0 of the array
                     .image_info(&history_infos), // Contains 2 items
@@ -290,7 +345,7 @@ impl DescriptorSets {
             writes.push(
                 vk::WriteDescriptorSet::default()
                     .dst_set(*set)
-                    .dst_binding(DescriptorSetLayout::ACCUMULATION_BINDING)
+                    .dst_binding(RaytracingDescriptorSetLayout::ACCUMULATION_BINDING)
                     .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                     .dst_array_element(0) // Start at index 0 of the array
                     .image_info(&accum_infos), // Contains 2 items
@@ -307,11 +362,101 @@ impl DescriptorSets {
     }
 }
 
-impl Drop for DescriptorSets {
+impl Drop for RaytracingDescriptorSets {
     fn drop(&mut self) {
         //only do this if you set VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT
         //unsafe { self.core.device().free_descriptor_sets(self.descriptor_pool, &self.descriptor_sets) }.unwrap();
 
         unsafe { self.core.device().inner().destroy_descriptor_pool(self.descriptor_pool, None) };
+    }
+}
+
+
+
+/// Wrapper struct for the denoise pass descriptor set
+pub(crate) struct DenoiseDescriptorSets {
+    descriptor_sets: Vec<vk::DescriptorSet>,
+    descriptor_pool: vk::DescriptorPool,
+    core: Rc<vulkan_abstraction::Core>,
+}
+
+impl DenoiseDescriptorSets {
+    pub fn new(
+        core: Rc<vulkan_abstraction::Core>,
+        layout: &DenoiseDescriptorSetLayout,
+        input_image: &vulkan_abstraction::Image,
+        output_image: &vulkan_abstraction::Image,
+    ) -> SrResult<Self> {
+        let device = core.device().inner();
+
+        let pool_sizes = [
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(2),
+        ];
+
+        let pool_info = vk::DescriptorPoolCreateInfo::default()
+            .pool_sizes(&pool_sizes)
+            .max_sets(1);
+
+        let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None)? };
+
+        let set_layouts = [layout.inner()];
+
+        let alloc_info = vk::DescriptorSetAllocateInfo::default()
+            .descriptor_pool(descriptor_pool)
+            .set_layouts(&set_layouts);
+
+        let descriptor_sets = unsafe { device.allocate_descriptor_sets(&alloc_info)? };
+        let set = descriptor_sets[0];
+
+        let input_view = input_image.image_view();
+        let output_view = output_image.image_view();
+
+        let input_info = vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::GENERAL)
+            .image_view(input_view);
+
+        let output_info = vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::GENERAL)
+            .image_view(output_view);
+
+        let writes = [
+            // Input
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .image_info(std::slice::from_ref(&input_info)),
+
+            // Output
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .image_info(std::slice::from_ref(&output_info)),
+        ];
+
+        unsafe { device.update_descriptor_sets(&writes, &[]) };
+
+        Ok(Self {
+            core,
+            descriptor_sets,
+            descriptor_pool,
+        })
+    }
+
+    pub fn inner(&self) -> &[vk::DescriptorSet] {
+        &self.descriptor_sets
+    }
+}
+
+impl Drop for DenoiseDescriptorSets {
+    fn drop(&mut self) {
+        unsafe {
+            self.core.device().inner().destroy_descriptor_pool(self.descriptor_pool, None);
+        }
     }
 }

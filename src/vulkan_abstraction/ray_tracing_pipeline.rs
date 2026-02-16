@@ -26,7 +26,7 @@ pub struct RayTracingPipeline {
 impl RayTracingPipeline {
     pub fn new(
         core: Rc<vulkan_abstraction::Core>,
-        descriptor_set_layout: &vulkan_abstraction::DescriptorSetLayout,
+        descriptor_set_layout: &vulkan_abstraction::RaytracingDescriptorSetLayout,
         generate_debug_info: bool,
     ) -> SrResult<Self> {
         if generate_debug_info {

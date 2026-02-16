@@ -13,6 +13,7 @@ use std::{collections::HashMap, rc::Rc};
 use ash::vk;
 
 use crate::utils::env_var_as_bool;
+use crate::vulkan_abstraction::DenoiseDescriptorSetLayout;
 
 struct ImageDependentData {
     pub raytracing_cmd_buf: vulkan_abstraction::CmdBuffer,
@@ -23,7 +24,9 @@ struct ImageDependentData {
     denoise_result_image: vulkan_abstraction::Image,
 
     #[allow(unused)]
-    pub descriptor_sets: vulkan_abstraction::DescriptorSets,
+    pub raytracing_descriptor_sets: vulkan_abstraction::RaytracingDescriptorSets,
+    #[allow(unused)]
+    pub denoise_descriptor_sets: vulkan_abstraction::DenoiseDescriptorSets,
 }
 
 pub type CreateSurfaceFn = dyn Fn(&ash::Entry, &ash::Instance) -> SrResult<vk::SurfaceKHR>;
@@ -41,7 +44,8 @@ pub struct Renderer {
 
     shader_binding_table: vulkan_abstraction::ShaderBindingTable,
     ray_tracing_pipeline: vulkan_abstraction::RayTracingPipeline,
-    descriptor_set_layout: vulkan_abstraction::DescriptorSetLayout,
+    ray_tracing_descriptor_set_layout: vulkan_abstraction::RaytracingDescriptorSetLayout,
+    denoise_descriptor_set_layout: DenoiseDescriptorSetLayout,
     image_extent: vk::Extent3D,
     image_format: vk::Format,
 
@@ -101,11 +105,12 @@ impl Renderer {
         //must be filled by loading a scene
         let shader_data_buffers = vulkan_abstraction::ShaderDataBuffers::new_empty(Rc::clone(&core))?;
 
-        let descriptor_set_layout = vulkan_abstraction::DescriptorSetLayout::new(Rc::clone(&core))?;
+        let ray_tracing_descriptor_set_layout = vulkan_abstraction::RaytracingDescriptorSetLayout::new(Rc::clone(&core))?;
+        let denoise_descriptor_set_layout = vulkan_abstraction::DenoiseDescriptorSetLayout::new(Rc::clone(&core))?;
 
         let ray_tracing_pipeline = vulkan_abstraction::RayTracingPipeline::new(
             Rc::clone(&core),
-            &descriptor_set_layout,
+            &ray_tracing_descriptor_set_layout,
             env_var_as_bool(ENABLE_SHADER_DEBUG_SYMBOLS_ENV_VAR).unwrap_or(IS_DEBUG_BUILD),
         )?;
 
@@ -186,7 +191,8 @@ impl Renderer {
 
                 shader_binding_table,
                 ray_tracing_pipeline,
-                descriptor_set_layout,
+                ray_tracing_descriptor_set_layout,
+                denoise_descriptor_set_layout,
 
                 blases,
                 tlas,
@@ -273,15 +279,17 @@ impl Renderer {
                 "sunray (internal, pre-blit) denoise result image",
             )?;
 
-            let descriptor_sets = vulkan_abstraction::DescriptorSets::new(
+            let raytracing_descriptor_sets = vulkan_abstraction::RaytracingDescriptorSets::new(
                 Rc::clone(&self.core),
-                &self.descriptor_set_layout,
+                &self.ray_tracing_descriptor_set_layout,
                 &self.tlas,
                 raytrace_result_image.image_view(),
                 &self.shader_data_buffers,
             )?;
 
-            descriptor_sets.update_accumulation_images(&self.accumulation_images, self.default_sampler.inner());
+            let denoise_descriptor_sets = vulkan_abstraction::DenoiseDescriptorSets::new(Rc::clone(&self.core), &self.denoise_descriptor_set_layout, &raytrace_result_image, &denoise_result_image)?;
+
+            raytracing_descriptor_sets.update_accumulation_images(&self.accumulation_images, self.default_sampler.inner());
 
             let blit_cmd_buf = vulkan_abstraction::CmdBuffer::new(Rc::clone(&self.core))?;
             let raytracing_cmd_buf = vulkan_abstraction::CmdBuffer::new(Rc::clone(&self.core))?;
@@ -317,7 +325,8 @@ impl Renderer {
                     denoise_result_image,
                     raytracing_cmd_buf,
                     blit_cmd_buf,
-                    descriptor_sets,
+                    raytracing_descriptor_sets,
+                    denoise_descriptor_sets,
                 },
             );
         }
@@ -384,7 +393,9 @@ impl Renderer {
         let denoised_image = img_dependent_data.denoise_result_image.inner();
         let result_extent = img_dependent_data.raytrace_result_image.extent();
 
-        let descriptor_sets_ptr = &img_dependent_data.descriptor_sets as *const vulkan_abstraction::DescriptorSets;
+        let raytracing_descriptor_sets_ptr = &img_dependent_data.raytracing_descriptor_sets as *const vulkan_abstraction::RaytracingDescriptorSets;
+        let denoise_descriptor_sets_ptr = &img_dependent_data.denoise_descriptor_sets as *const vulkan_abstraction::DenoiseDescriptorSets;
+
 
 
         unsafe {
@@ -398,14 +409,14 @@ impl Renderer {
 
             (*this_ptr).cmd_raytracing_render(
                 cmd_buf,
-                &*descriptor_sets_ptr, // Dereference back to reference
+                &*raytracing_descriptor_sets_ptr, // Dereference back to reference
                 result_image,
                 result_extent,
             )?;
 
             (*this_ptr).cmd_denoise_image(
                 cmd_buf,
-                &*descriptor_sets_ptr,
+                &*denoise_descriptor_sets_ptr,
                 result_extent.width,
                 result_extent.height,
                 result_image,
@@ -470,7 +481,7 @@ impl Renderer {
     fn cmd_raytracing_render(
         &mut self,
         cmd_buf: vk::CommandBuffer,
-        descriptor_sets: &vulkan_abstraction::DescriptorSets,
+        descriptor_sets: &vulkan_abstraction::RaytracingDescriptorSets,
         image: vk::Image,
         extent: vk::Extent3D,
     ) -> SrResult<()> {
@@ -611,7 +622,7 @@ impl Renderer {
     fn cmd_denoise_image(
         &self,
         cmd_buf: vk::CommandBuffer,
-        descriptor_sets: &vulkan_abstraction::DescriptorSets,
+        descriptor_sets: &vulkan_abstraction::DenoiseDescriptorSets,
         width: u32,
         height: u32,
         input_image:  vk::Image,
