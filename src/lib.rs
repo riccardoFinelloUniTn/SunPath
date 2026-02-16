@@ -309,10 +309,10 @@ impl Renderer {
                 Self::cmd_blit_image(
                     &self.core,
                     blit_cmd_buf.inner(),
-                    raytrace_result_image.inner(),
-                    raytrace_result_image.extent(),
+                    denoise_result_image.inner(),
+                    denoise_result_image.extent(),
                     *post_blit_image,
-                    raytrace_result_image.image_subresource_range(),
+                    denoise_result_image.image_subresource_range(),
                 )?;
 
                 unsafe { self.core.device().inner().end_command_buffer(blit_cmd_buf.inner()) }?;
