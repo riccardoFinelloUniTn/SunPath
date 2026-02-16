@@ -64,7 +64,7 @@ layout(push_constant) uniform push_constant_t {
 
 };
 layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
-layout(set = 0, binding = 1, rgba8) uniform image2D image;
+layout(set = 0, binding = 1, rgba32f) uniform image2D image;
 layout(set = 0, binding = 2) uniform matrices_uniform_buffer_t {
     mat4 view_inverse, proj_inverse;
 } matrices_uniform_buffer;

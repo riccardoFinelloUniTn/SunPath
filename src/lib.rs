@@ -262,7 +262,7 @@ impl Renderer {
             let raytrace_result_image = vulkan_abstraction::Image::new(
                 Rc::clone(&self.core),
                 self.image_extent,
-                vk::Format::R8G8B8A8_UNORM,
+                vk::Format::R32G32B32A32_SFLOAT,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
                 vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
@@ -272,7 +272,7 @@ impl Renderer {
             let denoise_result_image = vulkan_abstraction::Image::new(
                 Rc::clone(&self.core),
                 self.image_extent,
-                vk::Format::R8G8B8A8_UNORM,
+                vk::Format::R32G32B32A32_SFLOAT,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
                 vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
@@ -414,6 +414,7 @@ impl Renderer {
                 result_extent,
             )?;
 
+
             (*this_ptr).cmd_denoise_image(
                 cmd_buf,
                 &*denoise_descriptor_sets_ptr,
@@ -422,6 +423,8 @@ impl Renderer {
                 result_image,
                 denoised_image,
             )?;
+
+
 
             device.end_command_buffer(cmd_buf)?;
 
