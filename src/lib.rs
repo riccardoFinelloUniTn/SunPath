@@ -387,6 +387,7 @@ impl Renderer {
 
         // Raytracing
         img_dependent_data.raytracing_cmd_buf.fence_mut().wait()?;
+        img_dependent_data.blit_cmd_buf.fence_mut().wait()?;
 
         let cmd_buf = img_dependent_data.raytracing_cmd_buf.inner();
         let result_image = img_dependent_data.raytrace_result_image.inner();
@@ -395,7 +396,6 @@ impl Renderer {
 
         let raytracing_descriptor_sets_ptr = &img_dependent_data.raytracing_descriptor_sets as *const vulkan_abstraction::RaytracingDescriptorSets;
         let denoise_descriptor_sets_ptr = &img_dependent_data.denoise_descriptor_sets as *const vulkan_abstraction::DenoiseDescriptorSets;
-
 
 
         unsafe {
@@ -414,6 +414,19 @@ impl Renderer {
                 result_extent,
             )?;
 
+            let memory_barrier = vk::MemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE) // Wait for RT to finish writing
+                .dst_access_mask(vk::AccessFlags::SHADER_READ); // Make sure Denoise can see the data
+
+            device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR, // Source Stage
+                vk::PipelineStageFlags::COMPUTE_SHADER,         // Destination Stage (Denoising is usually compute)
+                vk::DependencyFlags::empty(),
+                &[memory_barrier], // Use a global memory barrier for simplicity
+                &[],
+                &[],
+            );
 
             (*this_ptr).cmd_denoise_image(
                 cmd_buf,
@@ -704,7 +717,7 @@ impl Renderer {
             .src_access_mask(vk::AccessFlags::SHADER_WRITE) // Denoise wrote it
             .dst_access_mask(vk::AccessFlags::TRANSFER_READ) // Blit reads it
             .old_layout(vk::ImageLayout::GENERAL)
-            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL) // Optimization for blit
+            .new_layout(vk::ImageLayout::GENERAL)
             .image(output_image)
             .subresource_range(vk::ImageSubresourceRange {
                 aspect_mask: vk::ImageAspectFlags::COLOR,
