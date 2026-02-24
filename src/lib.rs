@@ -22,6 +22,12 @@ struct ImageDependentData {
     raytrace_result_image: vulkan_abstraction::Image,
     #[allow(unused)]
     denoise_result_image: vulkan_abstraction::Image,
+    #[allow(unused)]
+    depth_image: vulkan_abstraction::Image,
+    #[allow(unused)]
+    normal_image: vulkan_abstraction::Image,
+    #[allow(unused)]
+    motion_vector_image: vulkan_abstraction::Image,
 
     #[allow(unused)]
     pub raytracing_descriptor_sets: vulkan_abstraction::RaytracingDescriptorSets,
@@ -266,7 +272,7 @@ impl Renderer {
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
                 vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
-                "sunray (internal, pre-blit) raytrace result image",
+                "sunray (preprocess) raytrace result image",
             )?;
 
             let denoise_result_image = vulkan_abstraction::Image::new(
@@ -279,6 +285,36 @@ impl Renderer {
                 "sunray (internal, pre-blit) denoise result image",
             )?;
 
+            let depth_image = vulkan_abstraction::Image::new(
+                Rc::clone(&self.core),
+                self.image_extent,
+                vk::Format::R32_SFLOAT, // r32f in GLSL
+                vk::ImageTiling::OPTIMAL,
+                gpu_allocator::MemoryLocation::GpuOnly,
+                vk::ImageUsageFlags::STORAGE,
+                "sunray depth image",
+            )?;
+
+            let normal_image = vulkan_abstraction::Image::new(
+                Rc::clone(&self.core),
+                self.image_extent,
+                vk::Format::R16G16B16A16_SFLOAT, // rgba16f in GLSL
+                vk::ImageTiling::OPTIMAL,
+                gpu_allocator::MemoryLocation::GpuOnly,
+                vk::ImageUsageFlags::STORAGE,
+                "sunray normal image",
+            )?;
+
+            let motion_vector_image = vulkan_abstraction::Image::new(
+                Rc::clone(&self.core),
+                self.image_extent,
+                vk::Format::R16G16_SFLOAT, // rg16f in GLSL
+                vk::ImageTiling::OPTIMAL,
+                gpu_allocator::MemoryLocation::GpuOnly,
+                vk::ImageUsageFlags::STORAGE,
+                "sunray motion vector image",
+            )?;
+
             let raytracing_descriptor_sets = vulkan_abstraction::RaytracingDescriptorSets::new(
                 Rc::clone(&self.core),
                 &self.ray_tracing_descriptor_set_layout,
@@ -287,9 +323,11 @@ impl Renderer {
                 &self.shader_data_buffers,
             )?;
 
-            let denoise_descriptor_sets = vulkan_abstraction::DenoiseDescriptorSets::new(Rc::clone(&self.core), &self.denoise_descriptor_set_layout, &raytrace_result_image, &denoise_result_image)?;
+            let denoise_descriptor_sets = vulkan_abstraction::DenoiseDescriptorSets::new(
+                Rc::clone(&self.core),
+                &self.denoise_descriptor_set_layout,
+                &raytrace_result_image, &denoise_result_image, /* &vulkan_abstraction::image::Image */, /* &vulkan_abstraction::image::Image */, /* &vulkan_abstraction::image::Image */, /* &[vulkan_abstraction::image::Image; 2] */, /* &[vulkan_abstraction::image::Image; 2] */, /* ash::vk::Sampler */)?;
 
-            raytracing_descriptor_sets.update_accumulation_images(&self.accumulation_images, self.default_sampler.inner());
 
             let blit_cmd_buf = vulkan_abstraction::CmdBuffer::new(Rc::clone(&self.core))?;
             let raytracing_cmd_buf = vulkan_abstraction::CmdBuffer::new(Rc::clone(&self.core))?;

@@ -18,9 +18,10 @@ impl RaytracingDescriptorSetLayout {
     pub const MATRICES_UNIFORM_BUFFER_BINDING: u32 = 2;
     pub const MESHES_INFO_STORAGE_BUFFER_BINDING: u32 = 3;
     pub const SAMPLERS_BINDING: u32 = 4;
-    pub const HISTORY_BINDING: u32 = 5;
-    pub const ACCUMULATION_BINDING: u32 = 6;
-    pub const NUMBER_OF_BINDINGS: usize = 7;
+    pub const DEPTH_BINDING: u32 = 5;
+    pub const NORMAL_BINDING: u32 = 6;
+    pub const MOTION_VECTOR_BINDING: u32 = 7;
+    pub const NUMBER_OF_BINDINGS: usize = 8;
 
 
     pub const NUMBER_OF_SAMPLERS: u32 = vulkan_abstraction::ShaderDataBuffers::NUMBER_OF_SAMPLERS as u32;
@@ -60,17 +61,23 @@ impl RaytracingDescriptorSetLayout {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(Self::NUMBER_OF_SAMPLERS)
                 .stage_flags(vk::ShaderStageFlags::ALL),
-            // history read layout binding
+            // Depth layout binding
             vk::DescriptorSetLayoutBinding::default()
-                .binding(Self::HISTORY_BINDING)
-                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(2)
-                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
-            // accumulation write layout binding
-            vk::DescriptorSetLayoutBinding::default()
-                .binding(Self::ACCUMULATION_BINDING)
+                .binding(Self::DEPTH_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                .descriptor_count(2)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+            // normal layout binding
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::NORMAL_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+            // motion vectors binding
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::MOTION_VECTOR_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
         ];
 
@@ -106,24 +113,64 @@ pub struct DenoiseDescriptorSetLayout {
 }
 
 impl DenoiseDescriptorSetLayout {
-    pub const INPUT_IMAGE_BINDING: u32 = 0;
+    pub const RAW_COLOR_BINDING: u32 = 0;
     pub const OUTPUT_IMAGE_BINDING: u32 = 1;
+    pub const DEPTH_BINDING: u32 = 2;
+    pub const NORMAL_BINDING: u32 = 3;
+    pub const MOTION_VECTOR_BINDING: u32 = 4;
+    pub const HISTORY_BINDING: u32 = 5;
+    pub const ACCUMULATION_BINDING: u32 = 6;
+
+    pub const NUMBER_OF_BINDINGS: usize = 7;
 
     pub fn new(core: Rc<vulkan_abstraction::Core>) -> SrResult<Self> {
         let device = core.device().inner();
 
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
-                .binding(Self::INPUT_IMAGE_BINDING)
+                .binding(Self::RAW_COLOR_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::COMPUTE), // Denoising happens in Compute
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
 
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::OUTPUT_IMAGE_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
+
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::DEPTH_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::NORMAL_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::MOTION_VECTOR_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::HISTORY_BINDING)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(2)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+
+            // Accumulation layout binding (Write-only, uses imageStore)
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::ACCUMULATION_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(2)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+
+
         ];
 
         let create_info = vk::DescriptorSetLayoutCreateInfo::default()
@@ -187,10 +234,15 @@ impl RaytracingDescriptorSets {
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS),
-            // 2 storage images (Output + accumulation)
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_IMAGE)
-                .descriptor_count(2),
+                .descriptor_count(1),
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1),
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1),
 
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
@@ -296,6 +348,7 @@ impl RaytracingDescriptorSets {
         })
     }
 
+    /*
     pub fn update_accumulation_images(
         &self,
         images: &[vulkan_abstraction::Image; 2],
@@ -357,6 +410,8 @@ impl RaytracingDescriptorSets {
         }
     }
 
+     */
+
     pub fn inner(&self) -> &[vk::DescriptorSet] {
         &self.descriptor_sets
     }
@@ -386,12 +441,21 @@ impl DenoiseDescriptorSets {
         layout: &DenoiseDescriptorSetLayout,
         input_image: &vulkan_abstraction::Image,
         output_image: &vulkan_abstraction::Image,
+        depth_image: &vulkan_abstraction::Image,
+        normal_image: &vulkan_abstraction::Image,
+        motion_vector_image: &vulkan_abstraction::Image,
+        history_images: &[vulkan_abstraction::Image; 2],
+        accumulation_images: &[vulkan_abstraction::Image; 2],
+        history_sampler: vk::Sampler,
     ) -> SrResult<Self> {
         let device = core.device().inner();
 
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(7),
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(2),
         ];
 
@@ -410,33 +474,85 @@ impl DenoiseDescriptorSets {
         let descriptor_sets = unsafe { device.allocate_descriptor_sets(&alloc_info)? };
         let set = descriptor_sets[0];
 
-        let input_view = input_image.image_view();
-        let output_view = output_image.image_view();
+        let create_info = |img: &vulkan_abstraction::Image| {
+            vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::GENERAL)
+                .image_view(img.image_view())
+        };
 
-        let input_info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::GENERAL)
-            .image_view(input_view);
+        let input_info = create_info(input_image);
+        let output_info = create_info(output_image);
+        let depth_info = create_info(depth_image);
+        let normal_info = create_info(normal_image);
+        let mv_info = create_info(motion_vector_image);
 
-        let output_info = vk::DescriptorImageInfo::default()
-            .image_layout(vk::ImageLayout::GENERAL)
-            .image_view(output_view);
+        // 3. Create Image Infos for the Ping-Pong Arrays
+        let history_infos = [
+            vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL) // Or GENERAL, depending on your barrier
+                .image_view(history_images[0].image_view())
+                .sampler(history_sampler),
+            vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(history_images[1].image_view())
+                .sampler(history_sampler),
+        ];
 
+        let accumulation_infos = [
+            create_info(&accumulation_images[0]),
+            create_info(&accumulation_images[1]),
+        ];
+
+        // 4. Write to the Descriptor Set
         let writes = [
-            // Input
+            // Binding 0: Raw Color
             vk::WriteDescriptorSet::default()
                 .dst_set(set)
-                .dst_binding(0)
+                .dst_binding(DenoiseDescriptorSetLayout::RAW_COLOR_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                .descriptor_count(1)
                 .image_info(std::slice::from_ref(&input_info)),
 
-            // Output
+            // Binding 1: Output
             vk::WriteDescriptorSet::default()
                 .dst_set(set)
-                .dst_binding(1)
+                .dst_binding(DenoiseDescriptorSetLayout::OUTPUT_IMAGE_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                .descriptor_count(1)
                 .image_info(std::slice::from_ref(&output_info)),
+
+            // Binding 2: Depth
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(DenoiseDescriptorSetLayout::DEPTH_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(std::slice::from_ref(&depth_info)),
+
+            // Binding 3: Normal
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(DenoiseDescriptorSetLayout::NORMAL_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(std::slice::from_ref(&normal_info)),
+
+            // Binding 4: Motion Vectors
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(DenoiseDescriptorSetLayout::MOTION_VECTOR_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(std::slice::from_ref(&mv_info)),
+
+            // Binding 5: History (Array of 2, Samplers)
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(DenoiseDescriptorSetLayout::HISTORY_BINDING)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&history_infos), // Pass the whole array!
+
+            // Binding 6: Accumulation (Array of 2, Storage)
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(DenoiseDescriptorSetLayout::ACCUMULATION_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(&accumulation_infos), // Pass the whole array!
         ];
 
         unsafe { device.update_descriptor_sets(&writes, &[]) };

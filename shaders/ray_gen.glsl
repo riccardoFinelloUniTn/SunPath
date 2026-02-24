@@ -5,14 +5,16 @@
 #include <shaders/common.glsl>
 #include <shaders/utils.glsl>
 
-#include <shaders/temporal_accumulation.glsl>
+layout(set = 0, binding = 1, rgba32f) uniform image2D raw_color_image; // This used to be your final output
+
+layout(set = 0, binding = 7, r32f) uniform image2D depth_image;
+layout(set = 0, binding = 8, rgba16f) uniform image2D normal_image;
+layout(set = 0, binding = 9, rg16f) uniform image2D motion_vector_image;
 
 layout(location = 0) rayPayloadEXT ray_payload_t prd;
 
-
-
-layout(set = 0, binding = 5) uniform sampler2D historyTextures[2];
-layout(set = 0, binding = 6, rgba32f) uniform image2D accumulationImages[2];
+//layout(set = 0, binding = 5) uniform sampler2D historyTextures[2];
+//layout(set = 0, binding = 6, rgba32f) uniform image2D accumulationImages[2];
 
 uint seed;
 float rnd() {
@@ -46,8 +48,6 @@ void main() {
         const vec2 inUV = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
         vec2 d = inUV * 2.0 - 1.0;
         d.y = -d.y;
-
-        // TODO: Pass actual frame count from Rust push constants later.
 
 
         vec4 origin    = matrices_uniform_buffer.view_inverse * vec4(0, 0, 0, 1);
@@ -100,17 +100,18 @@ void main() {
     vec3 current_frame_color = total_radiance / float(SAMPLES);
 
 
-    uint history_idx = frame_count % 2;
-    uint accum_idx = (frame_count + 1) % 2;
+    //uint history_idx = frame_count % 2;
+    //uint accum_idx = (frame_count + 1) % 2;
     // ----------------------
 
     // temporal accumulation logic
-    const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
-    const vec2 uv = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
+    //const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
+    //const vec2 uv = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
 
 
-    vec3 history_color;
+    //vec3 history_color;
 
+    /*
     if (frame_count == 0) {
 
         //history_color = vec3(1.0, 0.0,0.0);
@@ -124,6 +125,7 @@ void main() {
 
     //current_frame_color = vec3(0.0, 1.0, 0.0);
     imageStore(accumulationImages[accum_idx], ivec2(gl_LaunchIDEXT.xy), vec4(accumulated_color, 1.0));
+    */
 
-    imageStore(image, ivec2(gl_LaunchIDEXT.xy), vec4(accumulated_color, 1.0));
+    imageStore(raw_color_image, ivec2(gl_LaunchIDEXT.xy), vec4(current_frame_color, 1.0));
 }

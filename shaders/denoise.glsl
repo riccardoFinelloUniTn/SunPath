@@ -1,18 +1,31 @@
 #version 460
-layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(set = 0, binding = 0, rgba32f) uniform image2D inputImage;
-layout(set = 0, binding = 1, rgba32f) uniform image2D outputImage;
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
-layout (local_size_x = 16, local_size_y = 16) in;
+// Push Constants so we know what frame we are on
+layout(push_constant) uniform PushConstants {
+    uint frame_count;
+} pc;
+
+// Raw RT Output and Final Screen Output
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D raw_rt_color;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D output_image;
+
+
+layout(set = 0, binding = 2, r32f) uniform readonly image2D depth_image;
+layout(set = 0, binding = 3, rgba16f) uniform readonly image2D normal_image;
+layout(set = 0, binding = 4, rg16f) uniform readonly image2D motion_vector_image;
+
+layout(set = 0, binding = 5) uniform sampler2D history_samplers[2];
+layout(set = 0, binding = 6, rgba32f) uniform image2D accumulation_images[2];
 
 
 void main() {
-    ivec2 size = imageSize(outputImage);
+    ivec2 size = imageSize(output_image);
     ivec2 uv = ivec2(gl_GlobalInvocationID.xy);
     if (uv.x >= size.x || uv.y >= size.y) return;
 
-    vec3 centerColor = imageLoad(inputImage, uv).rgb;
+    vec3 centerColor = imageLoad(raw_rt_color, uv).rgb;
 
     vec3 minColor = vec3(10000.0);
     vec3 maxColor = vec3(-10000.0);
@@ -30,7 +43,7 @@ void main() {
             if (neighborPos.x < 0 || neighborPos.y < 0 ||
             neighborPos.x >= size.x || neighborPos.y >= size.y) continue;
 
-            vec3 c = imageLoad(inputImage, neighborPos).rgb;
+            vec3 c = imageLoad(raw_rt_color, neighborPos).rgb;
 
             minColor = min(minColor, c);
             maxColor = max(maxColor, c);
@@ -49,5 +62,5 @@ void main() {
 
     //temporarly disabled. Use finalcolor instead of centercolor
 
-    imageStore(outputImage, uv, vec4(centerColor, 1.0));
+    imageStore(output_image, uv, vec4(centerColor, 1.0));
 }
