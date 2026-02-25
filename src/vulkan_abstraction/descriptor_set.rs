@@ -520,11 +520,11 @@ impl DenoiseDescriptorSets {
         // 3. Create Image Infos for the Ping-Pong Arrays
         let history_infos = [
             vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL) // Or GENERAL, depending on your barrier
+                .image_layout(vk::ImageLayout::GENERAL)
                 .image_view(history_images[0].image_view())
                 .sampler(history_sampler),
             vk::DescriptorImageInfo::default()
-                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_layout(vk::ImageLayout::GENERAL)
                 .image_view(history_images[1].image_view())
                 .sampler(history_sampler),
         ];

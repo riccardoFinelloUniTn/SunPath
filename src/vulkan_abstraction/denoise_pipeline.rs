@@ -5,6 +5,13 @@ use crate::vulkan_abstraction::{self, Core};
 
 const SHADER_ENTRY_POINT: &CStr = c"main";
 
+#[allow(dead_code)] // read by the gpu
+#[repr(C, packed)]
+#[derive(Debug)]
+pub struct DenoisePushConstant {
+    pub frame_count: u32,
+}
+
 pub struct DenoisePipeline {
     core: Rc<Core>,
     pipeline: vk::Pipeline,
@@ -19,7 +26,7 @@ impl DenoisePipeline {
     ) -> SrResult<Self> {
         let device = core.device().inner();
 
-        // --- 1. Shader Loading Helper (Your Syntax) ---
+        //Shader Loading Helper
         let make_shader_stage_create_info =
             |stage: vk::ShaderStageFlags, spirv: &[u8]| -> SrResult<vk::PipelineShaderStageCreateInfo> {
 
@@ -39,21 +46,28 @@ impl DenoisePipeline {
                 Ok(stage_create_info)
             };
 
-        // --- 2. Load Denoise Shader ---
+        // Load Denoise Shader
         let denoise_stage_create_info = make_shader_stage_create_info(
             vk::ShaderStageFlags::COMPUTE,
             include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/denoise.spirv")),
         )?;
 
-        // --- 3. Descriptor Set Layout ---
+        // create push constants
+        let push_constant_ranges = [vk::PushConstantRange::default()
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .offset(0)
+            .size(std::mem::size_of::<DenoisePushConstant>() as u32)];
+
+        // Descriptor Set Layout
         let set_layouts = [descriptor_set_layout.inner()];
 
         let pipeline_layout_info = vk::PipelineLayoutCreateInfo::default()
-            .set_layouts(&set_layouts);
+            .set_layouts(&set_layouts)
+            .push_constant_ranges(&push_constant_ranges);
 
         let pipeline_layout = unsafe { device.create_pipeline_layout(&pipeline_layout_info, None)? };
 
-        // --- 5. Create Compute Pipeline ---
+        // Create Compute Pipeline
         let pipeline_info = vk::ComputePipelineCreateInfo::default()
             .stage(denoise_stage_create_info)
             .layout(pipeline_layout);
@@ -64,7 +78,7 @@ impl DenoisePipeline {
         };
         let pipeline = pipelines[0];
 
-        // --- 6. Cleanup Shader Module ---
+        // Cleanup Shader Module
         unsafe {
             device.destroy_shader_module(denoise_stage_create_info.module, None);
         }

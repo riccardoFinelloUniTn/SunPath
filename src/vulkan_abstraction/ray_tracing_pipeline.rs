@@ -11,7 +11,7 @@ const SHADER_ENTRY_POINT: &CStr = c"main";
 #[allow(dead_code)] // read by the gpu
 #[repr(C, packed)]
 #[derive(Debug)]
-pub struct PushConstant {
+pub struct RaytracingPushConstant {
     pub frame_count: u32,
     pub use_srgb: bool,
     pub _padding: [u8; 3], //push constant size must be a multiple of 4
@@ -114,7 +114,7 @@ impl RayTracingPipeline {
                 vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::MISS_KHR,
             )
             .offset(0)
-            .size(std::mem::size_of::<PushConstant>() as u32)];
+            .size(std::mem::size_of::<RaytracingPushConstant>() as u32)];
 
         let set_layouts = [descriptor_set_layout.inner()];
 

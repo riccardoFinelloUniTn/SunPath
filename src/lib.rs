@@ -570,7 +570,7 @@ impl Renderer {
         };
 
         // Initializing push constant values
-        let push_constants = vulkan_abstraction::PushConstant {
+        let push_constants = vulkan_abstraction::RaytracingPushConstant {
             frame_count: self.frame_count,
             use_srgb: self.image_format == vk::Format::R8G8B8A8_SRGB,
             _padding: [0; 3],
@@ -669,8 +669,8 @@ impl Renderer {
                 vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::MISS_KHR,
                 0,
                 &std::mem::transmute::<
-                    vulkan_abstraction::PushConstant,
-                    [u8; std::mem::size_of::<vulkan_abstraction::PushConstant>()],
+                    vulkan_abstraction::RaytracingPushConstant,
+                    [u8; std::mem::size_of::<vulkan_abstraction::RaytracingPushConstant>()],
                 >(push_constants), //TODO: comment this transmute
             );
             self.core.rt_pipeline_device().cmd_trace_rays(
@@ -728,7 +728,9 @@ impl Renderer {
                 layer_count: 1,
             });
 
-
+        let push_constants = vulkan_abstraction::DenoisePushConstant {
+            frame_count: self.frame_count,
+        };
 
         unsafe{
             device.cmd_pipeline_barrier(
@@ -753,6 +755,17 @@ impl Renderer {
                 0,
                 descriptor_sets.inner(),
                 &[],
+            );
+
+            device.cmd_push_constants(
+                cmd_buf,
+                self.denoise_pipeline.layout(),
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                &std::mem::transmute::<
+                    vulkan_abstraction::DenoisePushConstant,
+                    [u8; std::mem::size_of::<vulkan_abstraction::DenoisePushConstant>()],
+                >(push_constants),
             );
         }
 
