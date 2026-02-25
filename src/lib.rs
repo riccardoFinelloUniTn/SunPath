@@ -317,6 +317,73 @@ impl Renderer {
                 "sunray motion vector image",
             )?;
 
+
+            //Initializer block for g buffer images
+            {
+                let device = self.core.device().inner();
+                let mut setup_cmd_buf = vulkan_abstraction::CmdBuffer::new(Rc::clone(&self.core))?;
+
+                unsafe {
+                    let begin_info = vk::CommandBufferBeginInfo::default()
+                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+                    device.begin_command_buffer(setup_cmd_buf.inner(), &begin_info)?;
+
+                    let create_barrier = |image: vk::Image| {
+                        vk::ImageMemoryBarrier::default()
+                            .old_layout(vk::ImageLayout::UNDEFINED)
+                            .new_layout(vk::ImageLayout::GENERAL)
+                            .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                            .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
+                            .image(image)
+                            .subresource_range(vk::ImageSubresourceRange {
+                                aspect_mask: vk::ImageAspectFlags::COLOR,
+                                base_mip_level: 0,
+                                level_count: 1,
+                                base_array_layer: 0,
+                                layer_count: 1,
+                            })
+                            .src_access_mask(vk::AccessFlags::empty())
+                            .dst_access_mask(vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::SHADER_READ)
+                    };
+
+                    // Add all the newly created G-Buffer and output images
+                    let barriers = [
+                        create_barrier(raytrace_result_image.inner()),
+                        create_barrier(denoise_result_image.inner()),
+                        create_barrier(depth_image.inner()),
+                        create_barrier(normal_image.inner()),
+                        create_barrier(motion_vector_image.inner()),
+                    ];
+
+                    device.cmd_pipeline_barrier(
+                        setup_cmd_buf.inner(),
+                        vk::PipelineStageFlags::TOP_OF_PIPE,
+                        vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR
+                            | vk::PipelineStageFlags::COMPUTE_SHADER
+                            | vk::PipelineStageFlags::TRANSFER, // Added TRANSFER for the blit cmd buf later
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &barriers,
+                    );
+
+                    device.end_command_buffer(setup_cmd_buf.inner())?;
+
+                    // Submit to GPU and immediately wait for it to finish
+                    let fence = setup_cmd_buf.fence_mut().submit()?;
+                    self.core.queue().submit_async(
+                        setup_cmd_buf.inner(),
+                        &[],
+                        &[],
+                        &[],
+                        fence,
+                    )?;
+
+                    // Block the CPU so we guarantee the transitions are done before rendering starts
+                    setup_cmd_buf.fence_mut().wait()?;
+                }
+            }
+
             let raytracing_descriptor_sets = vulkan_abstraction::RaytracingDescriptorSets::new(
                 Rc::clone(&self.core),
                 &self.ray_tracing_descriptor_set_layout,

@@ -16,13 +16,7 @@ layout(set = 0, binding = 4, rg16f) uniform readonly image2D motion_vector_image
 layout(set = 0, binding = 5) uniform sampler2D history_samplers[2];
 layout(set = 0, binding = 6, rgba32f) uniform image2D accumulation_images[2];
 
-// --- HELPER FUNCTIONS ---
-
-// Determines which image index we read from (past) and which we write to (present)
-void get_ping_pong_indices(out uint history_idx, out uint accum_idx) {
-    history_idx = pc.frame_count % 2;
-    accum_idx   = (pc.frame_count + 1) % 2;
-}
+const float DISTANCE_FACTOR = 80;   //The factor of division to calculate the distance. Clamping creates artifacts and is expensive, so it's divided by a constant value.
 
 vec3 get_historical_color(uint history_idx, vec2 uv, vec3 current_color) {
     // If it's the first frame, we have no history, so return current color
@@ -47,7 +41,8 @@ void main() {
     vec3 current_color = imageLoad(raw_rt_color, pixel_coords).rgb;
 
     uint history_idx, accum_idx;
-    get_ping_pong_indices(history_idx, accum_idx);
+    history_idx = pc.frame_count % 2;
+    accum_idx   = (pc.frame_count + 1) % 2;
 
     vec3 history_color = get_historical_color(history_idx, uv, current_color);
 
@@ -59,6 +54,9 @@ void main() {
 
     vec4 red = vec4(1.0,0.0,0.0, 1.0);
 
-    // 7. Output: Show the result on the screen
-    imageStore(output_image, pixel_coords, vec4(accumulated_color, 1.0));
+    float d = imageLoad(depth_image, pixel_coords).r / DISTANCE_FACTOR;
+    imageStore(output_image, pixel_coords, vec4(d, d, d, 1.0));
+    //Show the result on the screen
+    //imageStore(output_image, pixel_coords, vec4(d, d, d, 1.0));
+    //imageStore(output_image, pixel_coords, vec4(accumulated_color, 1.0));
 }
