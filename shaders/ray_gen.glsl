@@ -99,33 +99,5 @@ void main() {
 
     vec3 current_frame_color = total_radiance / float(SAMPLES);
 
-
-    //uint history_idx = frame_count % 2;
-    //uint accum_idx = (frame_count + 1) % 2;
-    // ----------------------
-
-    // temporal accumulation logic
-    //const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
-    //const vec2 uv = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
-
-
-    //vec3 history_color;
-
-    /*
-    if (frame_count == 0) {
-
-        //history_color = vec3(1.0, 0.0,0.0);
-        history_color = current_frame_color;
-    } else {
-        history_color = texture(historyTextures[history_idx], uv).rgb;
-        //history_color = vec3(0.0, 0.0,1.0);
-    }
-
-    vec3 accumulated_color = mix(history_color, current_frame_color, 0.5);
-
-    //current_frame_color = vec3(0.0, 1.0, 0.0);
-    imageStore(accumulationImages[accum_idx], ivec2(gl_LaunchIDEXT.xy), vec4(accumulated_color, 1.0));
-    */
-
     imageStore(raw_color_image, ivec2(gl_LaunchIDEXT.xy), vec4(current_frame_color, 1.0));
 }
