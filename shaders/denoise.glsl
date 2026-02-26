@@ -84,6 +84,8 @@ void main() {
     float MAX_LUMINANCE = 10.0;       // NEW: The absolute maximum energy allowed in the blur
 
     float center_luma = get_luminance(center_color);
+    float sample_depth;
+    vec3 sample_normal;
 
     // 3. Loop over the neighboring pixels
     for (int y = -radius; y <= radius; ++y) {
@@ -92,26 +94,25 @@ void main() {
             ivec2 sample_coord = clamp(pixel_coords + offset, ivec2(0), size - 1);
 
             vec3 sample_color = imageLoad(raw_rt_color, sample_coord).rgb;
-            float sample_depth = imageLoad(depth_image, sample_coord).r;
-            vec3 sample_normal = imageLoad(normal_image, sample_coord).rgb;
+            sample_depth = imageLoad(depth_image, sample_coord).r;
+            sample_normal = imageLoad(normal_image, sample_coord).rgb;
 
             float sample_luma = get_luminance(sample_color);
 
-            // -- NEW: Firefly Clamping --
             // If the sample is absurdly bright, clamp its energy down so it doesn't nuke the average
             if (sample_luma > MAX_LUMINANCE) {
                 sample_color *= (MAX_LUMINANCE / sample_luma);
                 sample_luma = MAX_LUMINANCE;
             }
 
-            // -- Calculate Depth & Normal Weights (Same as before) --
+            //Calculate Depth & Normal Weights
             float depth_diff = abs(center_depth - sample_depth);
             float w_depth = exp(-depth_diff * DEPTH_SENSITIVITY);
 
             float normal_dot = max(0.0, dot(center_normal, sample_normal));
             float w_normal = pow(normal_dot, NORMAL_SENSITIVITY);
 
-            // -- NEW: Calculate Luminance Weight --
+            // Calculate Luminance Weight
             // If the neighbor is much brighter/darker, drop its weight
             float luma_diff = abs(center_luma - sample_luma);
             float w_luma = exp(-luma_diff * LUMA_SENSITIVITY);
@@ -143,6 +144,7 @@ void main() {
     
     vec3 final_color = ACESFilm(exposed_color);
 
-    imageStore(accumulation_images[accum_idx], pixel_coords, vec4(accumulated_color, 1.0));
+    //imageStore(accumulation_images[accum_idx], pixel_coords, vec4(accumulated_color, 1.0));
+    //float d = sample_depth / DISTANCE_FACTOR;
     imageStore(output_image, pixel_coords, vec4(final_color, 1.0));
 }

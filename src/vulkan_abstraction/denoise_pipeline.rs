@@ -5,6 +5,30 @@ use crate::vulkan_abstraction::{self, Core};
 
 const SHADER_ENTRY_POINT: &CStr = c"main";
 
+
+pub trait ComputeTypeDef {
+    type PushConstant;
+    fn spirv_bytes() -> &'static [u8];
+}
+
+pub struct DenoisePass;
+pub struct TemporalPass;
+
+impl ComputeTypeDef for DenoisePass {
+    type PushConstant = DenoisePushConstant;     //TODO change type
+    fn spirv_bytes() -> &'static [u8] {
+        include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/denoise.spirv"))
+    }
+}
+
+impl ComputeTypeDef for TemporalPass {
+    type PushConstant = DenoisePushConstant;    //TODO change type
+    fn spirv_bytes() -> &'static [u8] {
+        include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/temporal.spirv"))
+    }
+}
+
+
 #[allow(dead_code)] // read by the gpu
 #[repr(C, packed)]
 #[derive(Debug)]
@@ -12,14 +36,15 @@ pub struct DenoisePushConstant {
     pub frame_count: u32,
 }
 
-pub struct DenoisePipeline {
+pub struct ComputePipeline<T: ComputeTypeDef> {
     core: Rc<Core>,
     pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_set_layout: vk::DescriptorSetLayout,
+    _marker: T,
 }
 
-impl DenoisePipeline {
+impl ComputePipeline<DenoisePass> {
     pub fn new(
         core: Rc<Core>,
         descriptor_set_layout: &vulkan_abstraction::DenoiseDescriptorSetLayout
@@ -88,6 +113,7 @@ impl DenoisePipeline {
             pipeline,
             pipeline_layout,
             descriptor_set_layout: descriptor_set_layout.inner(),       //TODO this could be redundant
+            _marker: DenoisePass,
         })
     }
 
@@ -105,7 +131,7 @@ impl DenoisePipeline {
     }
 }
 
-impl Drop for DenoisePipeline {
+impl<T: ComputeTypeDef> Drop for ComputePipeline<T> {
     fn drop(&mut self) {
         let device = self.core.device().inner();
         unsafe {

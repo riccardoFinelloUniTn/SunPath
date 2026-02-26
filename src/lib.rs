@@ -56,7 +56,7 @@ pub struct Renderer {
     image_extent: vk::Extent3D,
     image_format: vk::Format,
 
-    denoise_pipeline: vulkan_abstraction::DenoisePipeline,
+    denoise_pipeline: vulkan_abstraction::ComputePipeline,
 
     fallback_texture_image: vulkan_abstraction::Image,
     fallback_texture_sampler: vulkan_abstraction::Sampler,
@@ -121,7 +121,7 @@ impl Renderer {
             env_var_as_bool(ENABLE_SHADER_DEBUG_SYMBOLS_ENV_VAR).unwrap_or(IS_DEBUG_BUILD),
         )?;
 
-        let denoise_pipeline = vulkan_abstraction::DenoisePipeline::new(
+        let denoise_pipeline = vulkan_abstraction::ComputePipeline::new(
             Rc::clone(&core),
             &denoise_descriptor_set_layout,
         )?;
