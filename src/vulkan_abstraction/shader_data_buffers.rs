@@ -10,6 +10,8 @@ use crate::{CameraMatrices, error::SrResult, vulkan_abstraction};
 struct MatricesBufferContents {
     pub view_inverse: na::Matrix4<f32>,
     pub proj_inverse: na::Matrix4<f32>,
+    pub view_proj: na::Matrix4<f32>,
+    pub prev_view_proj: na::Matrix4<f32>,
 }
 
 #[derive(Clone, Copy)]
@@ -114,12 +116,16 @@ impl ShaderDataBuffers {
         CameraMatrices {
             view_inverse,
             proj_inverse,
+            view_proj,
+            prev_view_proj
         }: CameraMatrices,
     ) -> SrResult<()> {
         let mem = self.matrices_uniform_buffer.map::<MatricesBufferContents>()?;
         mem[0] = MatricesBufferContents {
             view_inverse,
             proj_inverse,
+            view_proj,
+            prev_view_proj
         };
 
         Ok(())

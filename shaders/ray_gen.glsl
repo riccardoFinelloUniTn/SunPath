@@ -13,8 +13,6 @@ layout(set = 0, binding = 7, rg16f) uniform image2D motion_vector_image;
 
 layout(location = 0) rayPayloadEXT ray_payload_t prd;
 
-//layout(set = 0, binding = 5) uniform sampler2D historyTextures[2];
-//layout(set = 0, binding = 6, rgba32f) uniform image2D accumulationImages[2];
 
 uint seed;
 float rnd() {
@@ -68,16 +66,33 @@ void main() {
 
                 float depth_value;
                 vec3 normal_value;
+                vec2 motion_value;
 
                 if (prd.type == 1) { // Hit sky
                     depth_value = 100000.0; // Infinite distance
                     normal_value = vec3(0.0,0.0,0.0);
+                    motion_value = vec2(0.0, 0.0);
                 } else {
                     depth_value = prd.dist; // Raw linear distance
                     normal_value = prd.normal;
+
+                    vec3 world_pos = rayOrigin + rayDir * prd.dist;
+
+                    // 2. Project using the previous frame's View-Projection matrix
+                    vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(world_pos, 1.0);
+
+                    // 3. Perspective divide to get NDC (-1.0 to 1.0)
+                    vec2 prev_ndc = prev_clip.xy / prev_clip.w;
+
+                    // 4. Convert NDC to UV space (0.0 to 1.0)
+                    vec2 prev_uv = vec2(prev_ndc.x, -prev_ndc.y) * 0.5 + 0.5;
+
+                    // 5. Calculate motion vector
+                    motion_value = inUV - prev_uv;
                 }
                 imageStore(normal_image, ivec2(gl_LaunchIDEXT.xy), vec4(normal_value, 0.0));
                 imageStore(depth_image, ivec2(gl_LaunchIDEXT.xy), vec4(depth_value, 0.0, 0.0, 0.0));
+                imageStore(motion_vector_image, ivec2(gl_LaunchIDEXT.xy), vec4(motion_value, 0.0, 0.0));
             }
 
             //Hit sky

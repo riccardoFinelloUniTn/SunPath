@@ -78,5 +78,5 @@ void main() {
     float EXPOSURE = 3.0;
     vec3 final_color = ACESFilm(spatially_denoised_color * EXPOSURE);
 
-    imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
+    imageStore(spatial_output, pixel_coords, vec4(final_color, 1.0));
 }

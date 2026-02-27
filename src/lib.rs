@@ -72,6 +72,8 @@ pub struct Renderer {
     //2 images to avoid race conditions when reading/writing
     pub accumulation_images: [vulkan_abstraction::Image; 2],
     pub frame_count: u32,
+
+    prev_view_proj: nalgebra::Matrix4<f32>,       //used to calculate motion vectors
 }
 
 impl Renderer {
@@ -217,6 +219,7 @@ impl Renderer {
                 tlas,
                 scene_images: Vec::new(),
                 scene_samplers: Vec::new(),
+                prev_view_proj: nalgebra::zero(),
 
                 image_extent,
                 image_format,
@@ -555,7 +558,19 @@ impl Renderer {
     }
 
     pub fn set_camera(&mut self, camera: crate::Camera) -> SrResult<()> {
-        self.shader_data_buffers.set_matrices(camera.as_matrices(self.image_extent))
+        let mut matrices = camera.as_matrices(self.image_extent);
+
+        // Inject the history matrix saved from the last frame
+        matrices.prev_view_proj = self.prev_view_proj;
+        let tmp = matrices.view_proj;
+
+        // Upload the struct to the uniform buffer
+        self.shader_data_buffers.set_matrices(matrices)?;
+
+        // Save the current frame's matrix to use as history NEXT frame
+        self.prev_view_proj = tmp;
+
+        Ok(())
     }
 
     /// Render to dst_image. the user may also pass a Semaphore which the user should signal when the image is
