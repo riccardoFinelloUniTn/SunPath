@@ -33,6 +33,8 @@ struct ImageDependentData {
     #[allow(unused)]
     pub raytracing_descriptor_sets: vulkan_abstraction::RaytracingDescriptorSets,
     #[allow(unused)]
+    pub temporal_accumulation_descriptor_sets: vulkan_abstraction::TemporalAccumulationDescriptorSets,
+    #[allow(unused)]
     pub denoise_descriptor_sets: vulkan_abstraction::DenoiseDescriptorSets,
 }
 
@@ -129,7 +131,7 @@ impl Renderer {
             temporal_accumulation_descriptor_set_layout.inner()
         )?;
 
-        let denoise_pipeline = vulkan_abstraction::ComputePipeline::new(
+        let denoise_pipeline = vulkan_abstraction::ComputePipeline::<DenoisePass>::new(
             Rc::clone(&core),
             denoise_descriptor_set_layout.inner(),
         )?;
@@ -286,6 +288,8 @@ impl Renderer {
                 vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
                 "sunray (preprocess) raytrace result image",
             )?;
+
+
 
             let denoise_result_image = vulkan_abstraction::Image::new(
                 Rc::clone(&self.core),
@@ -462,6 +466,7 @@ impl Renderer {
                     raytracing_cmd_buf,
                     blit_cmd_buf,
                     raytracing_descriptor_sets,
+                    temporal_accumulation_descriptor_sets,
                     denoise_descriptor_sets,
                 },
             );
@@ -527,10 +532,12 @@ impl Renderer {
 
         let cmd_buf = img_dependent_data.raytracing_cmd_buf.inner();
         let result_image = img_dependent_data.raytrace_result_image.inner();
+        let motion_vector_image = img_dependent_data.motion_vector_image.inner();
         let denoised_image = img_dependent_data.denoise_result_image.inner();
         let result_extent = img_dependent_data.raytrace_result_image.extent();
 
         let raytracing_descriptor_sets_ptr = &img_dependent_data.raytracing_descriptor_sets as *const vulkan_abstraction::RaytracingDescriptorSets;
+        let temporal_accumulation_descriptor_sets_ptr = &img_dependent_data.temporal_accumulation_descriptor_sets as *const vulkan_abstraction::TemporalAccumulationDescriptorSets;
         let denoise_descriptor_sets_ptr = &img_dependent_data.denoise_descriptor_sets as *const vulkan_abstraction::DenoiseDescriptorSets;
 
 
@@ -564,12 +571,27 @@ impl Renderer {
                 &[],
             );
 
+            (*this_ptr).cmd_temporal_accumulation(
+                cmd_buf,
+                &*temporal_accumulation_descriptor_sets_ptr,
+                result_extent.width,
+                result_extent.height,
+                result_image,         // Raw RT output
+                motion_vector_image,  // From G-buffer
+                &self.accumulation_images,
+            )?;
+
+            // Find which image Temporal just wrote to so Denoise knows what to read
+            let accum_idx = ((self.frame_count + 1) % 2) as usize;
+            let current_temporal_image = self.accumulation_images[accum_idx].inner();
+
+
             (*this_ptr).cmd_denoise_image(
                 cmd_buf,
                 &*denoise_descriptor_sets_ptr,
                 result_extent.width,
                 result_extent.height,
-                result_image,
+                current_temporal_image,
                 denoised_image,
             )?;
 
@@ -771,6 +793,88 @@ impl Renderer {
         Ok(())
     }
 
+    fn cmd_temporal_accumulation(
+        &self,
+        cmd_buf: vk::CommandBuffer,
+        descriptor_sets: &vulkan_abstraction::TemporalAccumulationDescriptorSets,
+        width: u32,
+        height: u32,
+        raw_rt_image: vk::Image,
+        motion_vector_image: vk::Image,
+        accumulation_images: &[vulkan_abstraction::image::Image; 2],
+    ) -> SrResult<()> {
+        let device = self.core.device().inner();
+
+        let history_idx = (self.frame_count % 2) as usize;
+        let accum_idx = ((self.frame_count + 1) % 2) as usize;
+
+        // 1. Prepare inputs (RT Image and Motion Vectors)
+        let rt_barrier = vk::ImageMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ)
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .image(raw_rt_image)
+            .subresource_range(vk::ImageSubresourceRange { aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1 });
+
+        let mv_barrier = vk::ImageMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE) // Assuming written in G-Buffer pass
+            .dst_access_mask(vk::AccessFlags::SHADER_READ)
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .image(motion_vector_image)
+            .subresource_range(vk::ImageSubresourceRange { aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1 });
+
+        // 2. Prepare Ping-Pong Images
+        // The one we write to:
+        let write_barrier = vk::ImageMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::empty()) // Don't care what it was doing before
+            .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
+            .old_layout(vk::ImageLayout::UNDEFINED) // Discard old contents
+            .new_layout(vk::ImageLayout::GENERAL)
+            .image(accumulation_images[accum_idx].inner())
+            .subresource_range(vk::ImageSubresourceRange { aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1 });
+
+        // The one we read from (History):
+        let read_barrier = vk::ImageMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::SHADER_WRITE) // Written to last frame
+            .dst_access_mask(vk::AccessFlags::SHADER_READ)
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .image(accumulation_images[history_idx].inner())
+            .subresource_range(vk::ImageSubresourceRange { aspect_mask: vk::ImageAspectFlags::COLOR, base_mip_level: 0, level_count: 1, base_array_layer: 0, layer_count: 1 });
+
+        unsafe {
+            device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR, // Wait for RT
+                vk::PipelineStageFlags::COMPUTE_SHADER,         // Block Temporal
+                vk::DependencyFlags::empty(),
+                &[], &[],
+                &[rt_barrier, mv_barrier, write_barrier, read_barrier],
+            );
+
+            device.cmd_bind_pipeline(cmd_buf, vk::PipelineBindPoint::COMPUTE, self.temporal_accumulation_pipeline.inner());
+
+            device.cmd_bind_descriptor_sets(
+                cmd_buf, vk::PipelineBindPoint::COMPUTE, self.temporal_accumulation_pipeline.layout(), 0,
+                descriptor_sets.inner(), // Has all bindings combined
+                &[],
+            );
+
+            device.cmd_push_constants(
+                cmd_buf, self.temporal_accumulation_pipeline.layout(), vk::ShaderStageFlags::COMPUTE, 0,
+                &self.frame_count.to_ne_bytes(),
+            );
+
+            let group_x = (width + 15) / 16;
+            let group_y = (height + 15) / 16;
+            device.cmd_dispatch(cmd_buf, group_x, group_y, 1);
+        }
+
+        Ok(())
+    }
+
     fn cmd_denoise_image(
         &self,
         cmd_buf: vk::CommandBuffer,
@@ -831,12 +935,14 @@ impl Renderer {
                 self.denoise_pipeline.inner(),
             );
 
+            let accum_idx = (self.frame_count + 1) % 2;
+
             device.cmd_bind_descriptor_sets(
                 cmd_buf,
                 vk::PipelineBindPoint::COMPUTE,
                 self.denoise_pipeline.layout(),
                 0,
-                descriptor_sets.inner(),
+                &[descriptor_sets.inner()[accum_idx as usize]],
                 &[],
             );
 

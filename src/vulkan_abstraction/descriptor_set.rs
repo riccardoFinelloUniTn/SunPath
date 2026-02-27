@@ -550,6 +550,58 @@ impl TemporalAccumulationDescriptorSets {
         })
     }
 
+    pub fn update_temporal_descriptors(
+        &self,
+        images: &[vulkan_abstraction::image::Image; 2],
+        sampler: vk::Sampler,
+    ) {
+        let device = self.core.device().inner();
+
+        // 1. Prepare for Binding 2 (Storage Images - Writing)
+        let accum_infos = images.iter().map(|img| {
+            vk::DescriptorImageInfo::default()
+                .image_view(img.image_view())
+                .image_layout(vk::ImageLayout::GENERAL)
+        }).collect::<Vec<_>>();
+
+        // 2. Prepare for Binding 3 (Combined Image Samplers - Reading History)
+        let history_infos = images.iter().map(|img| {
+            vk::DescriptorImageInfo::default()
+                .sampler(sampler)
+                .image_view(img.image_view())
+                .image_layout(vk::ImageLayout::GENERAL)
+        }).collect::<Vec<_>>();
+
+        let mut writes = Vec::new();
+
+        // We only have one descriptor set for the Temporal pass
+        let set = self.inner()[0];
+
+        // Write Binding 2: accumulation_images[2]
+        writes.push(
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(2) // Matches our new GLSL/Layout
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .dst_array_element(0)
+                .image_info(&accum_infos),
+        );
+
+        // Write Binding 3: history_samplers[2]
+        writes.push(
+            vk::WriteDescriptorSet::default()
+                .dst_set(set)
+                .dst_binding(3) // Matches our new GLSL/Layout
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .dst_array_element(0)
+                .image_info(&history_infos),
+        );
+
+        unsafe {
+            device.update_descriptor_sets(&writes, &[]);
+        }
+    }
+
     pub fn inner(&self) -> &[vk::DescriptorSet] {
         &self.descriptor_sets
     }
