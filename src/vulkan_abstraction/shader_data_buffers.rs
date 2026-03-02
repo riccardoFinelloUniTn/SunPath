@@ -121,12 +121,6 @@ impl ShaderDataBuffers {
         }: CameraMatrices,
     ) -> SrResult<()> {
 
-        if view_proj == prev_view_proj {
-            println!("WARNING: prev_view_proj is IDENTICAL to view_proj!");
-        } else {
-            println!("Matrices are different. Difference sum: {}", (view_proj - prev_view_proj).sum());
-        }
-        
         let mem = self.matrices_uniform_buffer.map::<MatricesBufferContents>()?;
         mem[0] = MatricesBufferContents {
             view_inverse,

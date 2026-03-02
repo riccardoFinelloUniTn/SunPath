@@ -11,7 +11,7 @@ layout(set = 0, binding = 1, rg16f)   uniform readonly image2D motion_vector_ima
 layout(set = 0, binding = 2, rgba32f) uniform image2D accumulation_images[2];
 layout(set = 0, binding = 3)          uniform sampler2D history_samplers[2];
 
-const float ACCUMULATION_FACTOR = 0.1;
+const float ACCUMULATION_FACTOR = 0.01;
 const float COLOR_THRESHOLD = 0.2;
 
 vec3 get_historical_color(uint history_idx, vec2 uv, vec3 current_color) {
@@ -44,32 +44,44 @@ void main() {
     ivec2 pixel_coords = ivec2(gl_GlobalInvocationID.xy);
     if (pixel_coords.x >= size.x || pixel_coords.y >= size.y) return;
 
-    vec2 uv = (vec2(pixel_coords) + 0.5) / vec2(size);
-    vec2 motion_vector = imageLoad(motion_vector_image, pixel_coords).rg;
-    //motion_vector = vec2(0.0);
-    // Read the noisy input
     vec3 current_color = imageLoad(raw_rt_color, pixel_coords).rgb;
+    vec2 uv = (vec2(pixel_coords) + 0.5) / vec2(size);
+
+    // We look at the 3x3 area around the current pixel to see what colors are "legal"
+    vec3 min_color = current_color;
+    vec3 max_color = current_color;
+
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            if (x == 0 && y == 0) continue;
+            ivec2 neighbor_coords = clamp(pixel_coords + ivec2(x, y), ivec2(0), size - 1);
+            vec3 neighbor_color = imageLoad(raw_rt_color, neighbor_coords).rgb;
+            min_color = min(min_color, neighbor_color);
+            max_color = max(max_color, neighbor_color);
+        }
+    }
+    vec2 motion_vector = imageLoad(motion_vector_image, pixel_coords).rg;
+    vec2 prev_uv = uv - motion_vector;
 
     uint history_idx = pc.frame_count % 2;
     uint accum_idx   = (pc.frame_count + 1) % 2;
 
-    vec3 accumulated_color = perform_temporal_accumulation(
-    current_color,
-    history_samplers[history_idx],
-    uv,
-    motion_vector,
+    // Default to current if off-screen or first frames
+    vec3 accumulated_color = current_color;
 
-    pc.frame_count
-    );
+    bool is_off_screen = any(lessThan(prev_uv, vec2(0.0))) || any(greaterThan(prev_uv, vec2(1.0)));
 
-    // Final mix factor
-    accumulated_color = mix(get_historical_color(history_idx, uv, current_color), accumulated_color, ACCUMULATION_FACTOR);
+    if (!is_off_screen && pc.frame_count > 2) {
+        //Sub-pixel Fetch (Bilinear)
+        vec3 history_color = texture(history_samplers[history_idx], prev_uv).rgb;
 
-    if (pc.frame_count < 2) {
-        accumulated_color = current_color;
+        // If it's a "ghost" (color from an old object), it gets crushed to the new color.
+        vec3 clamped_history = clamp(history_color, min_color, max_color);
+
+        accumulated_color = mix(clamped_history, current_color, ACCUMULATION_FACTOR);
     }
 
-    //imageStore(accumulation_images[accum_idx], pixel_coords, vec4(motion_vector, 0.0, 1.0));
+    //imageStore(accumulation_images[accum_idx], pixel_coords, vec4(motion_vector * 1000000.0, 1.0, 1.0));
 
     imageStore(accumulation_images[accum_idx], pixel_coords, vec4(accumulated_color, 1.0));
     //imageStore(accumulation_images[accum_idx], pixel_coords, vec4(mix(motion_vector.r, accumulated_color.r, 0.5),mix(motion_vector.g, accumulated_color.g, 0.5),accumulated_color.b, 1.0));
