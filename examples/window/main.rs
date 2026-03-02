@@ -271,7 +271,7 @@ impl App {
 
         let camera = Camera::default()
             //.set_position(na::Point3::new(0.0, y, dist))
-            .set_position(na::Point3::new(0.0, y + (time * 5.0).cos() * 5.0, dist))
+            .set_position(na::Point3::new(0.0, y + (time * 0.2).cos() * 5.0, dist))
             //.set_position(na::Point3::new(dist * time.cos(), y, dist * time.sin()))
             .set_target(na::Point3::new(0.0, y, 0.0))
             .set_fov_y(45.0);

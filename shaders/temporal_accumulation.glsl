@@ -12,6 +12,7 @@ layout(set = 0, binding = 2, rgba32f) uniform image2D accumulation_images[2];
 layout(set = 0, binding = 3)          uniform sampler2D history_samplers[2];
 
 const float ACCUMULATION_FACTOR = 0.1;
+const float COLOR_THRESHOLD = 0.2;
 
 vec3 get_historical_color(uint history_idx, vec2 uv, vec3 current_color) {
     if (pc.frame_count == 0) return current_color;
@@ -28,6 +29,12 @@ vec3 perform_temporal_accumulation(vec3 current_color, sampler2D history_sampler
     vec3 history_color = texture(history_sampler, prev_uv).rgb;
 
 
+    vec3 diff = abs(history_color.rgb - current_color.rgb);
+    float max_diff = max(diff.r, max(diff.g, diff.b));
+
+    if (max_diff > COLOR_THRESHOLD) {
+        return current_color;
+    }
 
     return mix(history_color, current_color, ACCUMULATION_FACTOR);
 }

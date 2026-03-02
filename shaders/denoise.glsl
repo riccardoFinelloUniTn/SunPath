@@ -30,8 +30,8 @@ void main() {
     float center_depth = imageLoad(depth_image, pixel_coords).r;
     vec3 center_normal = imageLoad(normal_image, pixel_coords).rgb;
 
-    imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
-    return;
+    //imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
+    //return;
 
     // Early bypass for sky or extremely bright pixels
     if (center_depth >= 10000.0 || get_luminance(center_color) > 100.0) {
