@@ -66,7 +66,6 @@ pub struct TemporalAccumulationPushConstant {
 #[derive(Debug)]
 pub struct PostprocessPushConstant;
 
-
 pub struct ComputePipeline<T: ComputeTypeDef> {
     core: Rc<Core>,
     pipeline: vk::Pipeline,
@@ -99,10 +98,18 @@ impl<T:ComputeTypeDef> ComputePipeline<T> {
             .stage(vk::ShaderStageFlags::COMPUTE);
 
         // 4. Use the generic PushConstant type for size
-        let push_constant_ranges = [vk::PushConstantRange::default()
-            .stage_flags(vk::ShaderStageFlags::COMPUTE)
-            .offset(0)
-            .size(std::mem::size_of::<T::PushConstant>() as u32)];
+        let size = std::mem::size_of::<T::PushConstant>() as u32;
+
+        // 1. Only create the range if the size is actually greater than 0
+        let push_constant_ranges = if size > 0 {
+            vec![vk::PushConstantRange::default()
+                .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                .offset(0)
+                .size(size)]
+        } else {
+            // If it's a ZST, we provide an empty Vec
+            Vec::new()
+        };
 
         let set_layouts = [descriptor_set_layout];
 

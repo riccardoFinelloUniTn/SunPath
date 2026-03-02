@@ -50,6 +50,14 @@ impl PostprocessDescriptorSetLayout {
     }
 }
 
+impl Drop for PostprocessDescriptorSetLayout {
+    fn drop(&mut self) {
+        unsafe {
+            self.core.device().inner().destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+        }
+    }
+}
+
 pub struct PostProcessDescriptorSets {
     descriptor_sets: Vec<vk::DescriptorSet>,
     descriptor_pool: vk::DescriptorPool,
@@ -79,7 +87,7 @@ impl PostProcessDescriptorSets {
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None)? };
 
         // 2. Allocate Descriptor Sets
-        let set_layouts = [layout.inner(), layout.inner()]; // Layout used twice
+        let set_layouts = [layout.inner()]; // Layout used twice
 
         let alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(descriptor_pool)
@@ -101,11 +109,13 @@ impl PostProcessDescriptorSets {
         let writes = [
 
             vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_sets[0])
                 .dst_binding(PostprocessDescriptorSetLayout::INPUT_IMAGE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(std::slice::from_ref(&input_info)),
 
             vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_sets[0])
                 .dst_binding(PostprocessDescriptorSetLayout::OUTPUT_IMAGE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(std::slice::from_ref(&output_info)),

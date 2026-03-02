@@ -16,7 +16,6 @@ pub(crate) use acceleration_structure::*;
 pub use buffer::*;
 pub use cmd_pool::*;
 pub use core::*;
-pub(crate) use descriptor_set::*;
 pub use image::*;
 pub use queue::*;
 pub(crate) use ray_tracing_pipeline::*;

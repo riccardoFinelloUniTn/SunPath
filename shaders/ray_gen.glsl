@@ -99,7 +99,12 @@ void main() {
             //Hit Object
             vec3 hitPos = rayOrigin + rayDir * prd.dist;
 
+            float brightness = max(prd.emission.r, max(prd.emission.g, prd.emission.b));
             radiance += prd.emission * throughput;
+
+            if (brightness > 1.0) {
+                break;
+            }
 
             throughput *= prd.albedo;
 
@@ -121,7 +126,7 @@ void main() {
         }
 
         total_radiance += radiance;
-
+        total_radiance = min(total_radiance, 10.0);
     }
 
     vec3 current_frame_color = total_radiance / float(SAMPLES);
