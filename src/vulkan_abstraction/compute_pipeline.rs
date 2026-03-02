@@ -2,7 +2,7 @@ use std::{ffi::CStr, rc::Rc};
 use std::marker::PhantomData;
 use ash::vk;
 use crate::error::SrResult;
-use crate::vulkan_abstraction::{self, Core, DenoiseDescriptorSetLayout, PostprocessDescriptorSetLayout};
+use crate::vulkan_abstraction::{self, Core, DenoiseDescriptorSetLayout, PostProcessDescriptorSetLayout};
 use crate::vulkan_abstraction::TemporalAccumulationDescriptorSetLayout;
 
 const SHADER_ENTRY_POINT: &CStr = c"main";
@@ -36,7 +36,7 @@ impl ComputeTypeDef for TemporalPass {
 
 impl ComputeTypeDef for PostprocessPass {
     type PushConstant = PostprocessPushConstant;
-    type DescriptorSetLayout = PostprocessDescriptorSetLayout;
+    type DescriptorSetLayout = PostProcessDescriptorSetLayout;
 
     fn spirv_bytes() -> &'static [u8] {
         include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/postprocess.spirv"))
