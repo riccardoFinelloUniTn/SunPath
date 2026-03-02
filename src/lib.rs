@@ -15,6 +15,13 @@ use ash::vk;
 use crate::utils::env_var_as_bool;
 use crate::vulkan_abstraction::{DenoiseDescriptorSetLayout, DenoisePass, TemporalAccumulationDescriptorSetLayout, TemporalPass};
 
+struct SpatialDenoiseImages {
+    #[allow(unused)]
+    pub image_1: vulkan_abstraction::Image,
+    #[allow(unused)]
+    pub image_2: vulkan_abstraction::Image,
+}
+
 struct ImageDependentData {
     pub raytracing_cmd_buf: vulkan_abstraction::CmdBuffer,
     pub blit_cmd_buf: vulkan_abstraction::CmdBuffer,
@@ -29,6 +36,8 @@ struct ImageDependentData {
     #[allow(unused)]
     motion_vector_image: vulkan_abstraction::Image,
 
+    #[allow(unused)]
+    denoise_images: SpatialDenoiseImages,
 
     #[allow(unused)]
     pub raytracing_descriptor_sets: vulkan_abstraction::RaytracingDescriptorSets,
@@ -997,6 +1006,7 @@ impl Renderer {
 
         let push_constants = vulkan_abstraction::DenoisePushConstant {
             frame_count: self.frame_count,
+            step_width: 2,
         };
 
         unsafe{

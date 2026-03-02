@@ -15,9 +15,10 @@ pub trait ComputeTypeDef {
 
 pub struct DenoisePass;
 pub struct TemporalPass;
+pub struct PostprocessPass;
 
 impl ComputeTypeDef for DenoisePass {
-    type PushConstant = DenoisePushConstant;     //TODO change type
+    type PushConstant = DenoisePushConstant;
     type DescriptorSetLayout = DenoiseDescriptorSetLayout;
     fn spirv_bytes() -> &'static [u8] {
         include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/denoise.spirv"))
@@ -25,20 +26,41 @@ impl ComputeTypeDef for DenoisePass {
 }
 
 impl ComputeTypeDef for TemporalPass {
-    type PushConstant = DenoisePushConstant;    //TODO change type
+    type PushConstant = TemporalAccumulationPushConstant;
     type DescriptorSetLayout = TemporalAccumulationDescriptorSetLayout;
     fn spirv_bytes() -> &'static [u8] {
         include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/temporal_accumulation.spirv"))
     }
 }
 
+impl ComputeTypeDef for PostprocessPass {
+    type PushConstant = PostprocessPushConstant;
+    type DescriptorSetLayout = ();
+}
 
+///Push Constant for the denoiser pass.
+/// Frame count is self explicative.
+/// Step width references the distance between each pixel used as a sample during the a-trous filtering.
 #[allow(dead_code)] // read by the gpu
 #[repr(C, packed)]
 #[derive(Debug)]
 pub struct DenoisePushConstant {
     pub frame_count: u32,
+    pub step_width: u32,
 }
+
+#[allow(dead_code)] // read by the gpu
+#[repr(C, packed)]
+#[derive(Debug)]
+pub struct TemporalAccumulationPushConstant {
+    pub frame_count: u32,
+}
+
+#[allow(dead_code)] // read by the gpu
+#[repr(C, packed)]
+#[derive(Debug)]
+pub struct PostprocessPushConstant;
+
 
 pub struct ComputePipeline<T: ComputeTypeDef> {
     core: Rc<Core>,
