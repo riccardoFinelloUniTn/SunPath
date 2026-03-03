@@ -7,10 +7,10 @@ layout(push_constant) uniform PushConstants {
     int step_width;
 } pc;
 
-layout(set = 0, binding = 0, rgba32f) uniform readonly image2D temporal_result; // Input
+layout(set = 0, binding = 0, r11f_g11f_b10f) uniform readonly image2D temporal_result; // Input
 layout(set = 0, binding = 1, r32f)    uniform readonly image2D depth_image;     // [cite: 59]
 layout(set = 0, binding = 2, rgba16f) uniform readonly image2D normal_image;    // [cite: 60]
-layout(set = 0, binding = 3, rgba32f) uniform writeonly image2D spatial_output;  // [cite: 61]
+layout(set = 0, binding = 3, r11f_g11f_b10f) uniform writeonly image2D spatial_output;  // [cite: 61]
 
 float get_luminance(vec3 color) {
     return dot(color, vec3(0.2126, 0.7152, 0.0722)); // [cite: 62]

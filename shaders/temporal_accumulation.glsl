@@ -6,9 +6,9 @@ layout(push_constant) uniform PushConstants {
     uint frame_count;
 } pc;
 
-layout(set = 0, binding = 0, rgba32f) uniform readonly image2D raw_rt_color;
+layout(set = 0, binding = 0, r11f_g11f_b10f) uniform readonly image2D raw_rt_color;
 layout(set = 0, binding = 1, rg16f)   uniform readonly image2D motion_vector_image;
-layout(set = 0, binding = 2, rgba32f) uniform image2D accumulation_images[2];
+layout(set = 0, binding = 2, r11f_g11f_b10f) uniform image2D accumulation_images[2];
 layout(set = 0, binding = 3)          uniform sampler2D history_samplers[2];
 
 const float ACCUMULATION_FACTOR = 0.01;

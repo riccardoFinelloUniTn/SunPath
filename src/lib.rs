@@ -172,7 +172,7 @@ impl Renderer {
             vulkan_abstraction::Image::new(
                 core.clone(),
                 image_extent, // <--- USE THIS (it's already a vk::Extent3D)
-                vk::Format::R32G32B32A32_SFLOAT,
+                vk::Format::B10G11R11_UFLOAT_PACK32,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
                 vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
@@ -282,7 +282,7 @@ impl Renderer {
             vulkan_abstraction::Image::new(
                 self.core.clone(),
                 new_extent,
-                vk::Format::R32G32B32A32_SFLOAT,
+                vk::Format::B10G11R11_UFLOAT_PACK32,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
                 vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
@@ -357,7 +357,7 @@ impl Renderer {
             let raytrace_result_image = vulkan_abstraction::Image::new(
                 Rc::clone(&self.core),
                 self.image_extent,
-                vk::Format::R32G32B32A32_SFLOAT,
+                vk::Format::B10G11R11_UFLOAT_PACK32,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
                 vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
@@ -369,7 +369,7 @@ impl Renderer {
             let denoise_result_image = vulkan_abstraction::Image::new(
                 Rc::clone(&self.core),
                 self.image_extent,
-                vk::Format::R32G32B32A32_SFLOAT,
+                vk::Format::B10G11R11_UFLOAT_PACK32,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
                 vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
@@ -419,7 +419,7 @@ impl Renderer {
             let spatial_image_1 = vulkan_abstraction::Image::new(
                 Rc::clone(&self.core),
                 self.image_extent,
-                vk::Format::R32G32B32A32_SFLOAT,
+                vk::Format::B10G11R11_UFLOAT_PACK32,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
                 vk::ImageUsageFlags::STORAGE,
@@ -429,7 +429,7 @@ impl Renderer {
             let spatial_image_2 = vulkan_abstraction::Image::new(
                 Rc::clone(&self.core),
                 self.image_extent,
-                vk::Format::R32G32B32A32_SFLOAT,
+                vk::Format::B10G11R11_UFLOAT_PACK32,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
                 vk::ImageUsageFlags::STORAGE,

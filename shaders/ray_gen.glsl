@@ -5,7 +5,7 @@
 #include <shaders/common.glsl>
 #include <shaders/utils.glsl>
 
-layout(set = 0, binding = 1, rgba32f) uniform image2D raw_color_image; // This used to be your final output
+layout(set = 0, binding = 1, r11f_g11f_b10f) uniform image2D raw_color_image; // This used to be your final output
 
 layout(set = 0, binding = 5, r32f) uniform image2D depth_image;
 layout(set = 0, binding = 6, rgba16f) uniform image2D normal_image;
