@@ -14,6 +14,8 @@ impl TemporalAccumulationDescriptorSetLayout {
     pub const OUTPUT_IMAGES_BINDING: u32 = 2;  // Array of 2 (Ping-Pong Storage)
     pub const HISTORY_SAMPLERS_BINDING: u32 = 3; // Array of 2 (Ping-Pong Sampler)
 
+    
+
     pub const NUMBER_OF_BINDINGS: usize = 4;
 
     pub fn new(core: Rc<vulkan_abstraction::Core>) -> SrResult<Self> {

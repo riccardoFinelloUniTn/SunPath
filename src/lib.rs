@@ -287,10 +287,19 @@ impl Renderer {
             )
         };
 
+
+
+
         self.accumulation_images = [
             create_accum_image("Accumulation_1")?,
             create_accum_image("Accumulation_2")?,
         ];
+
+        self.denoising_images = [
+            create_accum_image("Denoising_1")?,
+            create_accum_image("Denoising_2")?,
+        ];
+
 
         let device = self.core.device().inner();
         let mut setup_cmd_buf = vulkan_abstraction::CmdBuffer::new(self.core.clone())?;
@@ -321,6 +330,8 @@ impl Renderer {
             let barriers = [
                 create_barrier(self.accumulation_images[0].inner()),
                 create_barrier(self.accumulation_images[1].inner()),
+                create_barrier(self.denoising_images[0].inner()),
+                create_barrier(self.denoising_images[1].inner()),
             ];
 
             device.cmd_pipeline_barrier(
@@ -530,7 +541,7 @@ impl Renderer {
             let denoise_descriptor_sets = vulkan_abstraction::DenoiseDescriptorSets::new(
                 Rc::clone(&self.core),
                 &self.denoise_descriptor_set_layout,
-                &self.accumulation_images,
+                &self.denoising_images,
                 &depth_image,
                 &normal_image,
                 &denoise_result_image,
@@ -716,49 +727,106 @@ impl Renderer {
                 &self.accumulation_images,
             )?;
 
-            // Find which image Temporal just wrote to so Denoise knows what to read
-            let accum_idx = ((self.frame_count + 1) % 2) as usize;
-            let current_temporal_image = self.accumulation_images[accum_idx].inner();
+            let accum_idx = (self.frame_count % 2) as usize; // Current written image
+            let src_accum = self.accumulation_images[accum_idx].inner();
+            let dst_denoise = self.denoising_images[0].inner();
 
+            // Barrier: Transition layouts for Copy
+            let copy_barriers = [
+                vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
+                    .old_layout(vk::ImageLayout::GENERAL)
+                    .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                    .image(src_accum)
+                    .subresource_range(*self.accumulation_images[accum_idx].image_subresource_range()),
+                vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::empty())
+                    .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                    .old_layout(vk::ImageLayout::GENERAL)
+                    .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .image(dst_denoise)
+                    .subresource_range(*self.denoising_images[0].image_subresource_range()),
+            ];
+
+            device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[], &[], &copy_barriers,
+            );
+
+            let copy_region = vk::ImageCopy::default()
+                .src_subresource(vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::COLOR).layer_count(1))
+                .dst_subresource(vk::ImageSubresourceLayers::default().aspect_mask(vk::ImageAspectFlags::COLOR).layer_count(1))
+                .extent(result_extent);
+
+            device.cmd_copy_image(
+                cmd_buf,
+                src_accum,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                dst_denoise,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[copy_region],
+            );
+
+            // Barrier: Transition back to GENERAL for Compute Shaders
+            let post_copy_barriers = [
+                vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::TRANSFER_READ)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
+                    .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                    .new_layout(vk::ImageLayout::GENERAL)
+                    .image(src_accum)
+                    .subresource_range(*self.accumulation_images[accum_idx].image_subresource_range()),
+                vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
+                    .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                    .new_layout(vk::ImageLayout::GENERAL)
+                    .image(dst_denoise)
+                    .subresource_range(*self.denoising_images[0].image_subresource_range()),
+            ];
+
+            device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::DependencyFlags::empty(),
+                &[], &[], &post_copy_barriers,
+            );
+
+            // 5. Denoise Ping-Pong Loop
             for i in 0..DENOISE_PASSES {
+                let read_idx = (i % 2) as usize;
+                let write_idx = ((i + 1) % 2) as usize;
 
-                let read_idx: usize = ((i + 1) % 2) as usize;
-                let write_idx = (i % 2) as usize;
+                (*this_ptr).cmd_denoise_image(
+                    cmd_buf, &*denoise_descriptor_sets_ptr,
+                    result_extent.width, result_extent.height,
+                    self.denoising_images[read_idx].inner(),
+                    self.denoising_images[write_idx].inner(),
+                    i,
+                )?;
 
-                if i == 0 {
-                    (*this_ptr).cmd_denoise_image(
-                        cmd_buf, &*denoise_descriptor_sets_ptr,
-                        result_extent.width, result_extent.height,
-                        current_temporal_image, // Initial input
-                        self.denoising_images[0].inner(),     // First workspace
-                        i,
-                    )?;
-                } else {
-                    (*this_ptr).cmd_denoise_image(
-                        cmd_buf, &*denoise_descriptor_sets_ptr,
-                        result_extent.width, result_extent.height,
-                        self.denoising_images[read_idx].inner(),
-                        self.denoising_images[write_idx].inner(),
-                        i,
-                    )?;
-                }
-
-                // --- CRITICAL: Add the barrier here ---
-                let barrier = vk::MemoryBarrier::default()
+                // Pass-to-pass barrier
+                let loop_barrier = vk::MemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::SHADER_WRITE)
                     .dst_access_mask(vk::AccessFlags::SHADER_READ);
 
-                unsafe {
-                    device.cmd_pipeline_barrier(
-                        cmd_buf,
-                        vk::PipelineStageFlags::COMPUTE_SHADER,
-                        vk::PipelineStageFlags::COMPUTE_SHADER,
-                        vk::DependencyFlags::empty(),
-                        &[barrier], &[], &[]
-                    );
-                }
-
+                device.cmd_pipeline_barrier(
+                    cmd_buf,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[loop_barrier], &[], &[]
+                );
             }
+
+            // 6. Post-process
+            // Use result of the last denoise pass
+            let final_denoise_idx = (DENOISE_PASSES % 2) as usize;
 
 
 
