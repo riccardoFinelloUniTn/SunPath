@@ -382,7 +382,7 @@ impl Renderer {
                 vk::Format::R32G32B32A32_SFLOAT,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
-                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST,
+                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::TRANSFER_SRC,
                 "sunray (internal, pre-blit) postprocess result image",
             )?;
 
@@ -564,10 +564,10 @@ impl Renderer {
                 Self::cmd_blit_image(
                     &self.core,
                     blit_cmd_buf.inner(),
-                    denoise_result_image.inner(),
-                    denoise_result_image.extent(),
+                    postprocess_result_image.inner(),
+                    postprocess_result_image.extent(),
                     *post_blit_image,
-                    denoise_result_image.image_subresource_range(),
+                    postprocess_result_image.image_subresource_range(),
                 )?;
 
                 unsafe { self.core.device().inner().end_command_buffer(blit_cmd_buf.inner()) }?;
