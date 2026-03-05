@@ -164,7 +164,7 @@ impl Renderer {
                 vk::Format::B10G11R11_UFLOAT_PACK32,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
-                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
+                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
                 name
             )
         };
@@ -280,7 +280,7 @@ impl Renderer {
                 vk::Format::B10G11R11_UFLOAT_PACK32,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
-                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED | vk::ImageUsageFlags::TRANSFER_SRC | vk::ImageUsageFlags::TRANSFER_DST,
+                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
                 name
             )
         };
@@ -366,7 +366,7 @@ impl Renderer {
                 vk::Format::B10G11R11_UFLOAT_PACK32,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
-                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+                vk::ImageUsageFlags::STORAGE,
                 "sunray (preprocess) raytrace result image",
             )?;
 
@@ -378,7 +378,7 @@ impl Renderer {
                 vk::Format::B10G11R11_UFLOAT_PACK32,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
-                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::TRANSFER_SRC,
+                vk::ImageUsageFlags::STORAGE,
                 "sunray (internal, pre-blit) denoise result image",
             )?;
 

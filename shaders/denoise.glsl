@@ -39,16 +39,13 @@ void main() {
     vec3 sum_color = vec3(0.0);
     float sum_weight = 0.0; // [cite: 69]
 
-    float DEPTH_SENSITIVITY = 1.0;
-    float NORMAL_SENSITIVITY = 64.0;
-    float LUMA_SENSITIVITY = 2.0;
-    float MAX_LUMINANCE = 10.0; // [cite: 70]
+    float DEPTH_SENSITIVITY = 1;
+    float NORMAL_SENSITIVITY = 80.0; // Tighter angle rejection
 
     float center_luma = get_luminance(center_color);
 
     for (int y = -2; y <= 2; ++y) {
         for (int x = -2; x <= 2; ++x) {
-            // Apply step_width to create the "holes" in the filter
             ivec2 sample_offset = ivec2(x, y) * pc.step_width;
             ivec2 sample_coord = clamp(pixel_coords + sample_offset, ivec2(0), size - 1);
 
@@ -57,17 +54,16 @@ void main() {
             vec3 sample_normal = texelFetch(normal_image, sample_coord, 0).rgb;
 
             float sample_luma = get_luminance(sample_color);
-            if (sample_luma > MAX_LUMINANCE) {
-                sample_color *= (MAX_LUMINANCE / sample_luma);
-                sample_luma = MAX_LUMINANCE;
-            }
 
             // Edge-stopping weights
             float w_depth = exp(-abs(center_depth - sample_depth) * DEPTH_SENSITIVITY);
-            float w_normal = pow(max(0.0, dot(center_normal, sample_normal)), NORMAL_SENSITIVITY);
-            float w_luma = exp(-abs(center_luma - sample_luma) * LUMA_SENSITIVITY);
+            float w_normal = exp((dot(center_normal, sample_normal) - 1.0) * NORMAL_SENSITIVITY);
 
-            // Combine edge-stopping with the B-Spline kernel weight
+            float luma_diff = abs(center_luma - sample_luma);
+            float luma_sigma = max(center_luma, sample_luma) * 0.4 + 0.01;
+            float w_luma = exp(-luma_diff / luma_sigma);
+
+            // Combine
             float weight = w_depth * w_normal * w_luma * kernel[x + 2] * kernel[y + 2];
 
             sum_color += sample_color * weight;
