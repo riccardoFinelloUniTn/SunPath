@@ -69,25 +69,26 @@ impl PostProcessDescriptorSets {
     pub fn new(
         core: Rc<vulkan_abstraction::Core>,
         layout: &PostprocessDescriptorSetLayout,
-        input_image: &vulkan_abstraction::Image,
+        denoised_input_images: &[vulkan_abstraction::Image; 2],
         output_image: &vulkan_abstraction::Image, // The final output image
     ) -> SrResult<Self> {
         let device = core.device().inner();
 
+        // 1. We now need 4 storage image descriptors total (2 bindings * 2 sets)
         let pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_IMAGE)
-                .descriptor_count(2),
+                .descriptor_count(4),
         ];
 
         let pool_info = vk::DescriptorPoolCreateInfo::default()
             .pool_sizes(&pool_sizes)
-            .max_sets(1);
+            .max_sets(2); // Allocate 2 sets
 
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None)? };
 
-        // 2. Allocate Descriptor Sets
-        let set_layouts = [layout.inner()]; // Layout used twice
+        // 2. Allocate 2 Descriptor Sets
+        let set_layouts = [layout.inner(), layout.inner()];
 
         let alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(descriptor_pool)
@@ -103,19 +104,33 @@ impl PostProcessDescriptorSets {
         };
 
         // 3. Image Infos
-        let input_info = create_info(input_image);
+        let input_info_0 = create_info(&denoised_input_images[0]);
+        let input_info_1 = create_info(&denoised_input_images[1]);
         let output_info = create_info(output_image);
 
         let writes = [
-
+            // --- SET 0 (Reads from Denoise Ping) ---
             vk::WriteDescriptorSet::default()
                 .dst_set(descriptor_sets[0])
                 .dst_binding(PostprocessDescriptorSetLayout::INPUT_IMAGE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
-                .image_info(std::slice::from_ref(&input_info)),
+                .image_info(std::slice::from_ref(&input_info_0)),
 
             vk::WriteDescriptorSet::default()
                 .dst_set(descriptor_sets[0])
+                .dst_binding(PostprocessDescriptorSetLayout::OUTPUT_IMAGE)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(std::slice::from_ref(&output_info)),
+
+            // --- SET 1 (Reads from Denoise Pong) ---
+            vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_sets[1])
+                .dst_binding(PostprocessDescriptorSetLayout::INPUT_IMAGE)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(std::slice::from_ref(&input_info_1)),
+
+            vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_sets[1])
                 .dst_binding(PostprocessDescriptorSetLayout::OUTPUT_IMAGE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(std::slice::from_ref(&output_info)),
@@ -134,7 +149,6 @@ impl PostProcessDescriptorSets {
         &self.descriptor_sets
     }
 }
-
 impl Drop for PostProcessDescriptorSets {
     fn drop(&mut self) {
         unsafe {

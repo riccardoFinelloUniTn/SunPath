@@ -539,7 +539,7 @@ impl Renderer {
             let denoise_descriptor_sets = vulkan_abstraction::DenoiseDescriptorSets::new(
                 Rc::clone(&self.core),
                 &self.denoise_descriptor_set_layout,
-                &self.denoising_images,
+                &self.accumulation_images,
                 &depth_image,
                 &normal_image,
                 &self.denoising_images,
@@ -548,7 +548,7 @@ impl Renderer {
             let postprocess_descriptor_sets = vulkan_abstraction::PostProcessDescriptorSets::new(
                 Rc::clone(&self.core),
                 &self.postprocess_descriptor_set_layout,
-                &denoise_result_image,
+                &self.denoising_images,
                 &postprocess_result_image,
             )?;
 
@@ -569,10 +569,10 @@ impl Renderer {
                 Self::cmd_blit_image(
                     &self.core,
                     blit_cmd_buf.inner(),
-                    raytrace_result_image.inner(),
-                    raytrace_result_image.extent(),
+                    postprocess_result_image.inner(),
+                    postprocess_result_image.extent(),
                     *post_blit_image,
-                    raytrace_result_image.image_subresource_range(),
+                    postprocess_result_image.image_subresource_range(),
                 )?;
 
                 unsafe { self.core.device().inner().end_command_buffer(blit_cmd_buf.inner()) }?;
@@ -725,6 +725,8 @@ impl Renderer {
                 &self.accumulation_images,
             )?;
 
+            //let temporal_barrier_1 = vk::MemoryBarrier::
+
             // 5. Denoise Ping-Pong Loop
             (*this_ptr).cmd_denoise_image(
                 cmd_buf,
@@ -749,6 +751,7 @@ impl Renderer {
                 //result_image,
                 self.denoising_images[0].inner(),
                 postprocessed_image,
+                final_denoise_idx
             )?;
 
 
@@ -1055,7 +1058,7 @@ impl Renderer {
         denoise_pingpong_images:  &[vulkan_abstraction::Image; 2],
     ) -> SrResult<()> {
         let device = self.core.device().inner();
-        let total_passes = 4; // Or use a member/constant like self.denoise_passes
+        let total_passes = DENOISE_PASSES;
 
         // Determine which accumulation image is the "latest" history to read from
         let history_idx = (self.frame_count % 2) as usize;
@@ -1108,7 +1111,7 @@ impl Renderer {
             let write_barrier = vk::ImageMemoryBarrier::default()
                 .src_access_mask(vk::AccessFlags::empty()) // Or SHADER_READ if it was a source in a previous pass
                 .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
-                .old_layout(vk::ImageLayout::GENERAL)
+                .old_layout(vk::ImageLayout::UNDEFINED)
                 .new_layout(vk::ImageLayout::GENERAL)
                 .image(write_img)
                 .subresource_range(vk::ImageSubresourceRange {
@@ -1177,8 +1180,9 @@ impl Renderer {
         descriptor_sets: &vulkan_abstraction::PostProcessDescriptorSets,
         width: u32,
         height: u32,
-        input_image:  vk::Image,
-        output_image:  vk::Image,
+        input_image: vk::Image,
+        output_image: vk::Image,
+        final_denoise_idx: usize, // ADDED: to track which descriptor set to bind
     ) -> SrResult<()> {
         let device = self.core.device().inner();
 
@@ -1201,7 +1205,7 @@ impl Renderer {
         let output_barrier = vk::ImageMemoryBarrier::default()
             .src_access_mask(vk::AccessFlags::empty())
             .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
-            .old_layout(vk::ImageLayout::UNDEFINED)
+            .old_layout(vk::ImageLayout::UNDEFINED) // CHANGED: Blit leaves this in GENERAL, so match it here
             .new_layout(vk::ImageLayout::GENERAL)
             .image(output_image)
             .subresource_range(vk::ImageSubresourceRange {
@@ -1228,12 +1232,13 @@ impl Renderer {
                 self.postprocess_pipeline.inner(),
             );
 
+            // CHANGED: Bind specifically Set 0 or Set 1 based on the denoise ping-pong result
             device.cmd_bind_descriptor_sets(
                 cmd_buf,
                 vk::PipelineBindPoint::COMPUTE,
                 self.postprocess_pipeline.layout(),
                 0,
-                descriptor_sets.inner(), // Assuming PostProcessDescriptorSets has an inner() returning vk::DescriptorSet
+                &[descriptor_sets.inner()[final_denoise_idx]],
                 &[],
             );
 
@@ -1307,7 +1312,7 @@ impl Renderer {
                 core,
                 cmd_buf,
                 src_image,
-                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
                 vk::PipelineStageFlags::TRANSFER,
                 vk::AccessFlags::SHADER_WRITE,
                 vk::AccessFlags::TRANSFER_READ,
