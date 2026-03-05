@@ -8,7 +8,7 @@
 layout(set = 0, binding = 1, r11f_g11f_b10f) uniform image2D raw_color_image; // This used to be your final output
 
 layout(set = 0, binding = 5, r32f) uniform image2D depth_image;
-layout(set = 0, binding = 6, rgba16f) uniform image2D normal_image;
+layout(set = 0, binding = 6, rgba8_snorm) uniform image2D normal_image;
 layout(set = 0, binding = 7, rg16f) uniform image2D motion_vector_image;
 
 layout(location = 0) rayPayloadEXT ray_payload_t prd;

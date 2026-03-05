@@ -8,8 +8,8 @@ layout(push_constant) uniform PushConstants {
 } pc;
 
 layout(set = 0, binding = 0, r11f_g11f_b10f) uniform readonly image2D temporal_result; // Input
-layout(set = 0, binding = 1, r32f)    uniform readonly image2D depth_image;
-layout(set = 0, binding = 2, rgba16f) uniform readonly image2D normal_image;
+layout(set = 0, binding = 1) uniform sampler2D depth_image;
+layout(set = 0, binding = 2) uniform sampler2D normal_image;
 layout(set = 0, binding = 3, r11f_g11f_b10f) uniform writeonly image2D spatial_output;
 
 float get_luminance(vec3 color) {
@@ -25,8 +25,8 @@ void main() {
     if (pixel_coords.x >= size.x || pixel_coords.y >= size.y) return;
 
     vec3 center_color = imageLoad(temporal_result, pixel_coords).rgb;
-    float center_depth = imageLoad(depth_image, pixel_coords).r;
-    vec3 center_normal = imageLoad(normal_image, pixel_coords).rgb;
+    float center_depth = texelFetch(depth_image, pixel_coords, 0).r;
+    vec3 center_normal = texelFetch(normal_image, pixel_coords, 0).rgb;
 
     //imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
     //return;
@@ -53,8 +53,8 @@ void main() {
             ivec2 sample_coord = clamp(pixel_coords + sample_offset, ivec2(0), size - 1);
 
             vec3 sample_color = imageLoad(temporal_result, sample_coord).rgb;
-            float sample_depth = imageLoad(depth_image, sample_coord).r;
-            vec3 sample_normal = imageLoad(normal_image, sample_coord).rgb;
+            float sample_depth = texelFetch(depth_image, sample_coord, 0).r;
+            vec3 sample_normal = texelFetch(normal_image, sample_coord, 0).rgb;
 
             float sample_luma = get_luminance(sample_color);
             if (sample_luma > MAX_LUMINANCE) {

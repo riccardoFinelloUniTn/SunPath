@@ -25,8 +25,6 @@ struct ImageDependentData {
     #[allow(unused)]
     raytrace_result_image: vulkan_abstraction::Image,
     #[allow(unused)]
-    denoise_result_image: vulkan_abstraction::Image,
-    #[allow(unused)]
     postprocess_result_image: vulkan_abstraction::Image,
     #[allow(unused)]
     depth_image: vulkan_abstraction::Image,
@@ -400,17 +398,17 @@ impl Renderer {
                 vk::Format::R32_SFLOAT, // r32f in GLSL
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
-                vk::ImageUsageFlags::STORAGE,
+                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
                 "sunray depth image",
             )?;
 
             let normal_image = vulkan_abstraction::Image::new(
                 Rc::clone(&self.core),
                 self.image_extent,
-                vk::Format::R16G16B16A16_SFLOAT, // rgba16f in GLSL
+                vk::Format::R8G8B8A8_SNORM,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
-                vk::ImageUsageFlags::STORAGE,
+                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
                 "sunray normal image",
             )?;
 
@@ -423,29 +421,6 @@ impl Renderer {
                 vk::ImageUsageFlags::STORAGE,
                 "sunray motion vector image",
             )?;
-
-            let spatial_image_1 = vulkan_abstraction::Image::new(
-                Rc::clone(&self.core),
-                self.image_extent,
-                vk::Format::B10G11R11_UFLOAT_PACK32,
-                vk::ImageTiling::OPTIMAL,
-                gpu_allocator::MemoryLocation::GpuOnly,
-                vk::ImageUsageFlags::STORAGE,
-                "denoise spatial image 1",
-            )?;
-
-            let spatial_image_2 = vulkan_abstraction::Image::new(
-                Rc::clone(&self.core),
-                self.image_extent,
-                vk::Format::B10G11R11_UFLOAT_PACK32,
-                vk::ImageTiling::OPTIMAL,
-                gpu_allocator::MemoryLocation::GpuOnly,
-                vk::ImageUsageFlags::STORAGE,
-                "denoise spatial image 2",
-            )?;
-
-
-
 
             //Initializer block for g buffer images
             {
@@ -482,6 +457,7 @@ impl Renderer {
                         create_barrier(depth_image.inner()),
                         create_barrier(normal_image.inner()),
                         create_barrier(motion_vector_image.inner()),
+                        create_barrier(postprocess_result_image.inner()),
                     ];
 
 
@@ -543,6 +519,7 @@ impl Renderer {
                 &depth_image,
                 &normal_image,
                 &self.denoising_images,
+                self.default_sampler.inner(),
             )?;
 
             let postprocess_descriptor_sets = vulkan_abstraction::PostProcessDescriptorSets::new(
@@ -582,7 +559,6 @@ impl Renderer {
                 *post_blit_image,
                 ImageDependentData {
                     raytrace_result_image,
-                    denoise_result_image,
                     postprocess_result_image,
                     depth_image,
                     normal_image,
@@ -675,7 +651,6 @@ impl Renderer {
         let cmd_buf = img_dependent_data.raytracing_cmd_buf.inner();
         let result_image = img_dependent_data.raytrace_result_image.inner();
         let motion_vector_image = img_dependent_data.motion_vector_image.inner();
-        let denoised_image = img_dependent_data.denoise_result_image.inner();
         let postprocessed_image = img_dependent_data.postprocess_result_image.inner();
         let result_extent = img_dependent_data.raytrace_result_image.extent();
 
@@ -713,6 +688,33 @@ impl Renderer {
                 &[memory_barrier], // Use a global memory barrier for simplicity
                 &[],
                 &[],
+            );
+
+            let read_only_barriers = [
+                vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                    .old_layout(vk::ImageLayout::GENERAL)
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image(img_dependent_data.depth_image.inner())
+                    .subresource_range(*img_dependent_data.depth_image.image_subresource_range()),
+                vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                    .old_layout(vk::ImageLayout::GENERAL)
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image(img_dependent_data.normal_image.inner())
+                    .subresource_range(*img_dependent_data.normal_image.image_subresource_range()),
+            ];
+
+            device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                vk::PipelineStageFlags::COMPUTE_SHADER,
+                vk::DependencyFlags::empty(),
+                &[], // Remove the global memory_barrier you had here
+                &[],
+                &read_only_barriers, // Add these image barriers
             );
 
             (*this_ptr).cmd_temporal_accumulation(
@@ -754,6 +756,31 @@ impl Renderer {
                 final_denoise_idx
             )?;
 
+            let return_to_general_barriers = [
+                vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::SHADER_READ)
+                    .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
+                    .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .new_layout(vk::ImageLayout::GENERAL)
+                    .image(img_dependent_data.depth_image.inner())
+                    .subresource_range(*img_dependent_data.depth_image.image_subresource_range()),
+                vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::SHADER_READ)
+                    .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
+                    .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .new_layout(vk::ImageLayout::GENERAL)
+                    .image(img_dependent_data.normal_image.inner())
+                    .subresource_range(*img_dependent_data.normal_image.image_subresource_range()),
+            ];
+
+            device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::COMPUTE_SHADER,         // Wait for Denoise to finish reading
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR, // Block next frame's RT from writing early
+                vk::DependencyFlags::empty(),
+                &[], &[],
+                &return_to_general_barriers,
+            );
 
 
 
@@ -1047,6 +1074,10 @@ impl Renderer {
 
         Ok(())
     }
+
+    ///This function takes 2 arrays of 2 images: the first are the temporal accumulation results, from which it only takes the image the first time
+    /// (accumulated_image -> first denoise pass on denoise_pingpong_images\[0])
+    /// All the next steps are done in the denoise_pingpong_images
 
     fn cmd_denoise_image(
         &self,
