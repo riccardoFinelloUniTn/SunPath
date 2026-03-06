@@ -872,7 +872,6 @@ impl Renderer {
 
         // Initializing push constant values
         let push_constants = vulkan_abstraction::RaytracingPushConstant {
-            prev_view_proj: self.prev_view_proj.as_slice().try_into().unwrap(),
             frame_count: self.frame_count,
             use_srgb: self.image_format == vk::Format::R8G8B8A8_SRGB,
             _padding: [0; 3],

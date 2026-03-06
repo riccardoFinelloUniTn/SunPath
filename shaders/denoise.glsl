@@ -26,15 +26,18 @@ void main() {
 
     vec3 center_color = imageLoad(temporal_result, pixel_coords).rgb;
     float center_depth = texelFetch(depth_image, pixel_coords, 0).r;
-    vec3 center_normal = texelFetch(normal_image, pixel_coords, 0).rgb;
 
-    //imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
-    //return;
-    // Early bypass for sky - bypass tonemapping as it's now a separate pass
+    //Early bypass for sky
+
     if (center_depth >= 10000.0) {
         imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
         return;
     }
+
+    vec3 center_normal = texelFetch(normal_image, pixel_coords, 0).rgb;
+
+    //imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
+    //return;
 
     vec3 sum_color = vec3(0.0);
     float sum_weight = 0.0; // [cite: 69]
@@ -78,5 +81,5 @@ void main() {
 
     vec3 spatially_denoised_color = sum_color / max(sum_weight, 0.0001);
 
-    imageStore(spatial_output, pixel_coords, vec4(spatially_denoised_color, 1.0));
+    imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
 }

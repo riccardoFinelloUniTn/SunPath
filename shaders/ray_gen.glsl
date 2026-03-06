@@ -36,6 +36,25 @@ vec3 get_random_bounce(vec3 normal) {
     return normalize(u * cos(phi) * r + v * sin(phi) * r + normal * sqrt(1.0 - r2));
 }
 
+vec3 get_ggx_microfacet(vec3 normal, float roughness, float r1, float r2) {
+    float a = roughness * roughness;
+    float phi = 2.0 * 3.14159265 * r1;
+    float cosTheta = sqrt((1.0 - r2) / (1.0 + (a*a - 1.0) * r2));
+    float sinTheta = sqrt(1.0 - cosTheta * cosTheta);
+
+    vec3 h;
+    h.x = cos(phi) * sinTheta;
+    h.y = sin(phi) * sinTheta;
+    h.z = cosTheta;
+
+    // Create an orthogonal basis around the normal
+    vec3 up = abs(normal.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(up, normal));
+    vec3 bitangent = cross(normal, tangent);
+
+    return tangent * h.x + bitangent * h.y + normal * h.z;
+}
+
 void main() {
 
     vec3 total_radiance = vec3(0.0);
@@ -57,7 +76,7 @@ void main() {
         vec3 throughput = vec3(1.0);
         vec3 radiance   = vec3(0.0);
 
-        for (int bounce = 0; bounce < 5; bounce++) {
+        for (int bounce = 0; bounce < 8; bounce++) {
             traceRayEXT(tlas, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0, rayOrigin, 0.001, rayDir, 10000.0, 0);
 
             bool is_sky = (prd.dist < 0.0);
@@ -77,13 +96,14 @@ void main() {
             vec3 hit_normal = unpack_normal(prd.normal_packed);
             vec3 hit_albedo = unpackUnorm4x8(prd.albedo_packed).rgb;
 
+
             // G-BUFFER CALCULATION
             if (bounce == 0) {
                 imageStore(depth_image, ivec2(gl_LaunchIDEXT.xy), vec4(prd.dist, 0.0, 0.0, 0.0));
                 imageStore(normal_image, ivec2(gl_LaunchIDEXT.xy), vec4(hit_normal, 0.0));
 
                 vec3 world_pos = rayOrigin + rayDir * prd.dist;
-                vec4 prev_clip = prev_view_proj * vec4(world_pos, 1.0);
+                vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(world_pos, 1.0);
                 vec2 prev_ndc = prev_clip.xy / prev_clip.w;
                 vec2 prev_uv = vec2(prev_ndc.x, -prev_ndc.y) * 0.5 + 0.5;
 
@@ -97,24 +117,59 @@ void main() {
                 break;
             }
 
-            // MATERIAL ABSORPTION & EARLY TERMINATION
-            throughput *= hit_albedo;
+            vec3 hitPos = rayOrigin + rayDir * prd.dist;
 
-            float p = max(throughput.r, max(throughput.g, throughput.b));
-            // If the material absorbed almost all light (e.g. black surface), kill the ray
-            if (p < 0.001) {
-                break;
+            // 6. UNPACK MATERIAL
+            vec2 mat_info = unpackHalf2x16(prd.material_info);
+            float roughness = max(mat_info.x, 0.01); // Prevent pure-mirror div-by-zero
+            float metallic = clamp(mat_info.y, 0.0, 1.0);
+
+            vec3 V = -rayDir;
+            vec3 N = hit_normal;
+
+            // Calculate Base Reflectivity (F0)
+            vec3 F0 = mix(vec3(0.04), hit_albedo, metallic);
+
+            float cos_theta = max(dot(N, V), 0.0);
+            vec3 F = F0 + (1.0 - F0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
+
+            // Statistical Path Selection Probability
+            float p_specular = clamp(max(F.r, max(F.g, F.b)), 0.05, 0.95);
+
+            // 7. PBR BOUNCE & THROUGHPUT
+            if (rnd() < p_specular) {
+                // --- SPECULAR BOUNCE ---
+                vec3 H = get_ggx_microfacet(N, roughness, rnd(), rnd());
+                rayDir = reflect(-V, H);
+
+                if (dot(N, rayDir) <= 0.0) {
+                    rayDir = get_random_bounce(N);
+                }
+
+                throughput *= (F / p_specular);
+            } else {
+                // --- DIFFUSE BOUNCE ---
+                rayDir = get_random_bounce(N);
+
+                // Only tint with albedo if it's a diffuse bounce!
+                throughput *= hit_albedo * (1.0 - metallic) * (1.0 - F) / (1.0 - p_specular);
             }
 
-            //RUSSIAN ROULETTE
+            // 8. RUSSIAN ROULETTE & EARLY TERMINATION
+            // Calculate using the NEW throughput after PBR logic applied it
+            float p = max(throughput.r, max(throughput.g, throughput.b));
+
+            if (p < 0.001) {
+                break; // Material absorbed almost everything, kill ray
+            }
+
             if (bounce > 2) {
                 if (rnd() > p) break;
                 throughput /= p;
             }
 
-            // SETUP NEXT BOUNCE (Deferred math)
-            vec3 hitPos = rayOrigin + rayDir * prd.dist;
-            rayDir    = get_random_bounce(hit_normal);
+            // 9. SETUP NEXT ORIGIN
+            // (rayDir was already correctly set by the PBR block)
             rayOrigin = hitPos + hit_normal * 0.001;
         }
 

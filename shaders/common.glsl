@@ -60,7 +60,6 @@ struct mesh_info_t {
 };
 
 layout(push_constant) uniform push_constant_t {
-    mat4 prev_view_proj;
     uint frame_count;
     bool use_srgb;
 

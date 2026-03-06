@@ -55,4 +55,5 @@ void main() {
     payload.emission = final_emission;
     payload.albedo_packed = packUnorm4x8(vec4(base_color.rgb, 1.0));
     payload.normal_packed = pack_normal(world_normal);
+    payload.material_info = packHalf2x16(vec2(material.roughness_factor, material.metallic_factor));
 }
