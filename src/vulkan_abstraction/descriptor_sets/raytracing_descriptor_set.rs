@@ -20,7 +20,8 @@ impl RaytracingDescriptorSetLayout {
     pub const NORMAL_BINDING: u32 = 6;
     pub const DIFFUSE_BINDING: u32 = 7;
     pub const MOTION_VECTOR_BINDING: u32 = 8;
-    pub const NUMBER_OF_BINDINGS: usize = 9;
+    pub const EMISSIVE_TRIANGLES_BINDING: u32 = 9;
+    pub const NUMBER_OF_BINDINGS: usize = 10;
 
 
     pub const NUMBER_OF_SAMPLERS: u32 = vulkan_abstraction::ShaderDataBuffers::NUMBER_OF_SAMPLERS as u32;
@@ -81,6 +82,11 @@ impl RaytracingDescriptorSetLayout {
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::MOTION_VECTOR_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::EMISSIVE_TRIANGLES_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
         ];
@@ -144,8 +150,8 @@ impl RaytracingDescriptorSets {
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(1),
             vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1),
+                .ty(vk::DescriptorType::STORAGE_BUFFER)     //Meshes info + Emissive triangles
+                .descriptor_count(2),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS),
@@ -266,6 +272,17 @@ impl RaytracingDescriptorSets {
                 .buffer_info(&descriptor_buffer_infos)
                 .dst_set(descriptor_sets[0])
                 .dst_binding(RaytracingDescriptorSetLayout::MESHES_INFO_STORAGE_BUFFER_BINDING),
+        );
+
+        let emissive_buffer_infos = [vk::DescriptorBufferInfo::default()
+            .buffer(shader_data.get_emissive_triangles_storage_buffer())
+            .range(vk::WHOLE_SIZE)];
+        push_write(
+            vk::WriteDescriptorSet::default()
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&emissive_buffer_infos)
+                .dst_set(descriptor_sets[0])
+                .dst_binding(RaytracingDescriptorSetLayout::EMISSIVE_TRIANGLES_BINDING),
         );
 
         // write samplers to descriptor set

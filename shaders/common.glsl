@@ -59,6 +59,13 @@ struct mesh_info_t {
     material_t material;
 };
 
+struct emissive_triangle_t {
+    vec4 v0_area;    // xyz = v0, w = area
+    vec4 v1;         // xyz = v1, w = pad
+    vec4 v2;         // xyz = v2, w = pad
+    vec4 emission;   // rgb = color * strength, w = pad
+};
+
 layout(push_constant) uniform push_constant_t {
     uint frame_count;
     bool use_srgb;
@@ -74,5 +81,8 @@ layout(set = 0, binding = 3) buffer meshes_info_storage_buffer_t {
 } meshes_info_uniform_buffer;
 
 layout(set = 0, binding = 4) uniform sampler2D texture_samplers[1024];
+layout(set = 0, binding = 9) readonly buffer EmissiveTrianglesBuffer {
+    emissive_triangle_t emissive_triangles[];
+};
 
 #endif

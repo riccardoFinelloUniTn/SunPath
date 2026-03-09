@@ -17,7 +17,7 @@ use crate::vulkan_abstraction::{DenoiseDescriptorSetLayout, DenoisePass, PostPro
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
 
-pub const DENOISE_PASSES: u32 = 3;
+pub const DENOISE_PASSES: u32 = 7;
 
 pub const EXPOSURE: f32 = 1.0;
 
@@ -604,7 +604,7 @@ impl Renderer {
     }
 
     pub fn load_scene(&mut self, scene: &crate::Scene, scene_data: crate::SceneData) -> SrResult<()> {
-        let (blas_instances, materials, textures, samplers, images) =
+        let (blas_instances, materials, textures, samplers, images, emissive_triangles) =
             scene.load_into_gpu(&self.core, &mut self.blases, scene_data)?;
 
         let fallback_texture = vulkan_abstraction::Texture(&self.fallback_texture_image, &self.fallback_texture_sampler);
@@ -617,6 +617,7 @@ impl Renderer {
             &textures,
             fallback_texture,
             &self.default_sampler,
+            &emissive_triangles,
         )?;
 
         self.scene_images = images;

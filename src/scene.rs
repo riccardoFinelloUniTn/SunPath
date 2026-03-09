@@ -4,7 +4,6 @@ use crate::{error::SrResult, vulkan_abstraction};
 
 use ash::vk;
 use nalgebra as na;
-use crate::vulkan_abstraction::gltf::EmissiveTriangle;
 
 type BlasInstanceInfo = (usize, na::Matrix4<f32>);
 
@@ -39,7 +38,7 @@ impl Scene {
         Vec<vulkan_abstraction::gltf::Texture>,
         Vec<vulkan_abstraction::image::Sampler>,
         Vec<vulkan_abstraction::Image>,
-
+        Vec<vulkan_abstraction::gltf::EmissiveTriangle>
     )> {
         blases.clear();
 
@@ -93,7 +92,7 @@ impl Scene {
 
         let images: Result<Vec<_>, _> = scene_data.images.into_iter().map(|image| to_vk_image(core, image)).collect();
 
-        Ok((blas_instances, materials, scene_data.textures, samplers?, images?))
+        Ok((blas_instances, materials, scene_data.textures, samplers?, images?, emissive_triangles))
     }
 
     fn explore_node(
@@ -105,7 +104,7 @@ impl Scene {
         primitives_blas_index: &mut HashMap<vulkan_abstraction::gltf::PrimitiveUniqueKey, usize>,
         materials: &mut Vec<vulkan_abstraction::gltf::Material>,
         scene_data: &mut crate::SceneData,
-        emissive_triangles: &mut Vec<EmissiveTriangle>
+        emissive_triangles: &mut Vec<vulkan_abstraction::gltf::EmissiveTriangle>
     ) -> SrResult<()> {
         if let Some(mesh) = node.mesh() {
             for primitive in mesh.primitives() {
@@ -151,7 +150,7 @@ impl Scene {
                         let edge2 = world_v2.xyz() - world_v0.xyz();
                         let area = edge1.cross(&edge2).norm() * 0.5;
 
-                        emissive_triangles.push(EmissiveTriangle {
+                        emissive_triangles.push(vulkan_abstraction::gltf::EmissiveTriangle {
                             v0: [world_v0.x, world_v0.y, world_v0.z, area],
                             v1: [world_v1.x, world_v1.y, world_v1.z, 0.0],
                             v2: [world_v2.x, world_v2.y, world_v2.z, 0.0],

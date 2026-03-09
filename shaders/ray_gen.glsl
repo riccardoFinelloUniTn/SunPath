@@ -5,7 +5,7 @@
 #include <shaders/common.glsl>
 #include <shaders/utils.glsl>
 
-layout(set = 0, binding = 1, r11f_g11f_b10f) uniform image2D raw_color_image; // This used to be your final output
+layout(set = 0, binding = 1, r11f_g11f_b10f) uniform image2D raw_color_image;
 
 layout(set = 0, binding = 5, r16f) uniform image2D depth_image;
 layout(set = 0, binding = 6, rgba8_snorm) uniform image2D normal_image;
@@ -13,7 +13,7 @@ layout(set = 0, binding = 7, r11f_g11f_b10f) uniform image2D diffuse_image;
 layout(set = 0, binding = 8, rg16f) uniform image2D motion_vector_image;
 
 layout(location = 0) rayPayloadEXT ray_payload_t prd;
-
+//layout(location = 1) rayPayloadEXT bool is_shadow_miss;
 
 uint seed;
 float rnd() {
@@ -48,7 +48,6 @@ vec3 get_ggx_microfacet(vec3 normal, float roughness, float r1, float r2) {
     h.y = sin(phi) * sinTheta;
     h.z = cosTheta;
 
-    // Create an orthogonal basis around the normal
     vec3 up = abs(normal.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
     vec3 tangent = normalize(cross(up, normal));
     vec3 bitangent = cross(normal, tangent);
@@ -61,6 +60,7 @@ void main() {
     vec3 total_radiance = vec3(0.0);
     int SAMPLES = 1;
     init_rng(gl_LaunchIDEXT.xy, frame_count);
+
     for(int i = 0; i < SAMPLES; i++){
         const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
         const vec2 inUV = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
@@ -82,26 +82,28 @@ void main() {
 
             bool is_sky = (prd.dist < 0.0);
 
-            // SKY HANDLING
             if (is_sky) {
                 if (bounce == 0) {
                     imageStore(depth_image, ivec2(gl_LaunchIDEXT.xy), vec4(100000.0, 0.0, 0.0, 0.0));
                     imageStore(normal_image, ivec2(gl_LaunchIDEXT.xy), vec4(0.0));
                     imageStore(motion_vector_image, ivec2(gl_LaunchIDEXT.xy), vec4(0.0));
                 }
-                radiance += vec3(0.05, 0.05, 0.1) * throughput; // Ambient Sky Color
+                radiance += vec3(0.05, 0.05, 0.1) * throughput;
                 break;
             }
 
-            // UNPACK ATTRIBUTES
             vec3 hit_normal = unpack_normal(prd.normal_packed);
             vec3 hit_albedo = unpackUnorm4x8(prd.albedo_packed).rgb;
 
+            vec3 hitPos = rayOrigin + rayDir * prd.dist;
 
-            // G-BUFFER CALCULATION
+            vec2 mat_info = unpackHalf2x16(prd.material_info);
+            float roughness = max(mat_info.x, 0.01);
+            float metallic = clamp(mat_info.y, 0.0, 1.0);
+
             if (bounce == 0) {
                 imageStore(depth_image, ivec2(gl_LaunchIDEXT.xy), vec4(prd.dist, 0.0, 0.0, 0.0));
-                imageStore(normal_image, ivec2(gl_LaunchIDEXT.xy), vec4(hit_normal, 0.0));
+                imageStore(normal_image, ivec2(gl_LaunchIDEXT.xy), vec4(hit_normal, roughness));
                 imageStore(diffuse_image, ivec2(gl_LaunchIDEXT.xy), vec4(hit_albedo, 0.0));
 
                 vec3 world_pos = rayOrigin + rayDir * prd.dist;
@@ -112,35 +114,71 @@ void main() {
                 imageStore(motion_vector_image, ivec2(gl_LaunchIDEXT.xy), vec4(inUV - prev_uv, 0.0, 0.0));
             }
 
-            // 4. EMISSIVE BREAK
             radiance += prd.emission * throughput;
             float brightness = max(prd.emission.r, max(prd.emission.g, prd.emission.b));
             if (brightness > 1.0) {
                 break;
             }
 
-            vec3 hitPos = rayOrigin + rayDir * prd.dist;
 
-            // 6. UNPACK MATERIAL
-            vec2 mat_info = unpackHalf2x16(prd.material_info);
-            float roughness = max(mat_info.x, 0.01); // Prevent pure-mirror div-by-zero
-            float metallic = clamp(mat_info.y, 0.0, 1.0);
+            uint num_lights = emissive_triangles.length();
+            if (num_lights > 0 && bounce < 2 && roughness > 0.2) {
+                // Pick a random light triangle
+                uint light_idx = min(uint(rnd() * num_lights), num_lights - 1);
+                emissive_triangle_t light = emissive_triangles[light_idx];
+
+                // Pick a random point on the triangle using barycentrics
+                float r1 = rnd();
+                float r2 = rnd();
+                float sqr1 = sqrt(r1);
+                float u = 1.0 - sqr1;
+                float v = r2 * sqr1;
+                float w = 1.0 - u - v;
+
+                vec3 light_pos = light.v0_area.xyz * u + light.v1.xyz * v + light.v2.xyz * w;
+                vec3 light_normal = normalize(cross(light.v1.xyz - light.v0_area.xyz, light.v2.xyz - light.v0_area.xyz));
+
+                // Setup the shadow ray
+                vec3 shadow_ray_dir = light_pos - hitPos;
+                float light_dist = length(shadow_ray_dir);
+                shadow_ray_dir /= light_dist;
+
+                // Check if the light is facing us, and we are facing the light
+                float cos_theta_light = max(dot(light_normal, -shadow_ray_dir), 0.0);
+                float cos_theta_surface = max(dot(hit_normal, shadow_ray_dir), 0.0);
+
+                if (cos_theta_light > 0.0 && cos_theta_surface > 0.0) {
+                    uint ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT;
+
+                    // THE TRICK: Reset our dist to a "hit" state
+                    prd.dist = 1.0;
+
+                    // Notice we changed the missIndex (arg 6) and payload (arg 11) back to 0!
+                    traceRayEXT(tlas, ray_flags, 0xFF, 0, 0, 0, hitPos, 0.001, shadow_ray_dir, light_dist - 0.001, 0);
+
+                    // If it is < 0.0, ray_miss.glsl ran, meaning the light is visible!
+                    if (prd.dist < 0.0) {
+                        float light_area = light.v0_area.w;
+                        float solid_angle_pdf = (light_dist * light_dist) / (cos_theta_light * light_area * float(num_lights));
+                        radiance += (light.emission.rgb * hit_albedo * throughput * cos_theta_surface) / (solid_angle_pdf * 3.14159);
+                    }
+                }
+            }
+
+
+
 
             vec3 V = -rayDir;
             vec3 N = hit_normal;
 
-            // Calculate Base Reflectivity (F0)
             vec3 F0 = mix(vec3(0.04), hit_albedo, metallic);
 
             float cos_theta = max(dot(N, V), 0.0);
             vec3 F = F0 + (1.0 - F0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
 
-            // Statistical Path Selection Probability
             float p_specular = clamp(max(F.r, max(F.g, F.b)), 0.05, 0.95);
 
-            // 7. PBR BOUNCE & THROUGHPUT
             if (rnd() < p_specular) {
-                // --- SPECULAR BOUNCE ---
                 vec3 H = get_ggx_microfacet(N, roughness, rnd(), rnd());
                 rayDir = reflect(-V, H);
 
@@ -150,19 +188,14 @@ void main() {
 
                 throughput *= (F / p_specular);
             } else {
-                // --- DIFFUSE BOUNCE ---
                 rayDir = get_random_bounce(N);
-
-                // Only tint with albedo if it's a diffuse bounce!
                 throughput *= hit_albedo * (1.0 - metallic) * (1.0 - F) / (1.0 - p_specular);
             }
 
-            // 8. RUSSIAN ROULETTE & EARLY TERMINATION
-            // Calculate using the NEW throughput after PBR logic applied it
             float p = max(throughput.r, max(throughput.g, throughput.b));
 
             if (p < 0.001) {
-                break; // Material absorbed almost everything, kill ray
+                break;
             }
 
             if (bounce > 2) {
@@ -170,8 +203,6 @@ void main() {
                 throughput /= p;
             }
 
-            // 9. SETUP NEXT ORIGIN
-            // (rayDir was already correctly set by the PBR block)
             rayOrigin = hitPos + hit_normal * 0.001;
         }
 

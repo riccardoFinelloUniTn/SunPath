@@ -35,7 +35,13 @@ void main() {
         return;
     }
 
-    vec3 center_normal = texelFetch(normal_image, pixel_coords, 0).rgb;
+    vec4 normal_data = texelFetch(normal_image, pixel_coords, 0);
+    vec3 center_normal = normal_data.rgb;
+    float center_roughness = normal_data.a;
+
+    if(center_roughness < 0.1){
+        imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
+    }
     vec3 center_diffuse = texelFetch(diffuse_image, pixel_coords, 0).rgb;
 
     //imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));

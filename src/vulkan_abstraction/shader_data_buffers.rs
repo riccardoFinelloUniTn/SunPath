@@ -91,7 +91,7 @@ struct MeshesInfoBufferContents {
 pub(crate) struct ShaderDataBuffers {
     matrices_uniform_buffer: vulkan_abstraction::Buffer,
     meshes_info_storage_buffer: vulkan_abstraction::Buffer,
-
+    emissive_triangles_storage_buffer: vulkan_abstraction::Buffer,
     textures: Vec<(vk::Sampler, vk::ImageView)>,
 
     core: Rc<vulkan_abstraction::Core>,
@@ -106,6 +106,7 @@ impl ShaderDataBuffers {
         Ok(Self {
             matrices_uniform_buffer,
             meshes_info_storage_buffer: vulkan_abstraction::Buffer::new_null(Rc::clone(&core)),
+            emissive_triangles_storage_buffer: vulkan_abstraction::Buffer::new_null(Rc::clone(&core)),
             textures: Vec::new(),
             core,
         })
@@ -141,10 +142,39 @@ impl ShaderDataBuffers {
         textures: &[vulkan_abstraction::gltf::Texture],
         fallback: vulkan_abstraction::Texture,
         default_sampler: &vulkan_abstraction::Sampler,
+        emissive_triangles: &[vulkan_abstraction::gltf::EmissiveTriangle],
     ) -> SrResult<()> {
         self.set_meshes_info(blas_instances, materials)?;
         self.set_textures(images, samplers, textures, fallback, default_sampler);
+        self.set_emissive_triangles(emissive_triangles)?;
 
+        Ok(())
+    }
+
+    fn set_emissive_triangles(
+        &mut self,
+        emissive_triangles: &[vulkan_abstraction::gltf::EmissiveTriangle],
+    ) -> SrResult<()> {
+        if emissive_triangles.is_empty() {
+            //1-element dummy buffer of zeroes if there are no lights
+            let dummy = [vulkan_abstraction::gltf::EmissiveTriangle {
+                v0: [0.0; 4],
+                v1: [0.0; 4],
+                v2: [0.0; 4],
+                emission: [0.0; 4],
+            }];
+            self.emissive_triangles_storage_buffer = vulkan_abstraction::Buffer::new_storage_from_data(
+                Rc::clone(&self.core),
+                &dummy,
+                "emissive triangles dummy storage buffer",
+            )?;
+        } else {
+            self.emissive_triangles_storage_buffer = vulkan_abstraction::Buffer::new_storage_from_data(
+                Rc::clone(&self.core),
+                emissive_triangles,
+                "emissive triangles storage buffer",
+            )?;
+        }
         Ok(())
     }
 
@@ -204,6 +234,10 @@ impl ShaderDataBuffers {
 
     pub fn get_meshes_info_storage_buffer(&self) -> vk::Buffer {
         self.meshes_info_storage_buffer.inner()
+    }
+
+    pub fn get_emissive_triangles_storage_buffer(&self) -> vk::Buffer {
+        self.emissive_triangles_storage_buffer.inner()
     }
 
     pub fn get_textures(&self) -> &[(vk::Sampler, vk::ImageView)] {
