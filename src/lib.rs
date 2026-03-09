@@ -17,7 +17,7 @@ use crate::vulkan_abstraction::{DenoiseDescriptorSetLayout, DenoisePass, PostPro
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
 
-pub const DENOISE_PASSES: u32 = 7;
+pub const DENOISE_PASSES: u32 = 3;
 
 pub const EXPOSURE: f32 = 1.0;
 
@@ -32,6 +32,8 @@ struct ImageDependentData {
     depth_image: vulkan_abstraction::Image,
     #[allow(unused)]
     normal_image: vulkan_abstraction::Image,
+    #[allow(unused)]
+    diffuse_image: vulkan_abstraction::Image,
     #[allow(unused)]
     motion_vector_image: vulkan_abstraction::Image,
 
@@ -414,6 +416,16 @@ impl Renderer {
                 "sunray normal image",
             )?;
 
+            let diffuse_image = vulkan_abstraction::Image::new(
+                Rc::clone(&self.core),
+                self.image_extent,
+                vk::Format::B10G11R11_UFLOAT_PACK32,
+                vk::ImageTiling::OPTIMAL,
+                gpu_allocator::MemoryLocation::GpuOnly,
+                vk::ImageUsageFlags::STORAGE | vk::ImageUsageFlags::SAMPLED,
+                "sunray diffuse image",
+            )?;
+
             let motion_vector_image = vulkan_abstraction::Image::new(
                 Rc::clone(&self.core),
                 self.image_extent,
@@ -458,6 +470,7 @@ impl Renderer {
                         create_barrier(denoise_result_image.inner()),
                         create_barrier(depth_image.inner()),
                         create_barrier(normal_image.inner()),
+                        create_barrier(diffuse_image.inner()),
                         create_barrier(motion_vector_image.inner()),
                         create_barrier(postprocess_result_image.inner()),
                     ];
@@ -500,6 +513,7 @@ impl Renderer {
                 &raytrace_result_image, // Raw color output
                 &depth_image,           // G-Buffer Depth
                 &normal_image,          // G-Buffer Normals
+                &diffuse_image,         // G-Buffer Diffuse
                 &motion_vector_image,   // G-Buffer Motion
                 &self.shader_data_buffers,
             )?;
@@ -520,6 +534,7 @@ impl Renderer {
                 &self.accumulation_images,
                 &depth_image,
                 &normal_image,
+                &diffuse_image,
                 &self.denoising_images,
                 self.default_sampler.inner(),
             )?;
@@ -564,6 +579,7 @@ impl Renderer {
                     postprocess_result_image,
                     depth_image,
                     normal_image,
+                    diffuse_image,
                     motion_vector_image,
                     raytracing_cmd_buf,
                     blit_cmd_buf,
@@ -707,6 +723,13 @@ impl Renderer {
                     .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image(img_dependent_data.normal_image.inner())
                     .subresource_range(*img_dependent_data.normal_image.image_subresource_range()),
+                vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                    .old_layout(vk::ImageLayout::GENERAL)
+                    .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .image(img_dependent_data.diffuse_image.inner())
+                    .subresource_range(*img_dependent_data.normal_image.image_subresource_range()),
             ];
 
             device.cmd_pipeline_barrier(
@@ -773,6 +796,13 @@ impl Renderer {
                     .new_layout(vk::ImageLayout::GENERAL)
                     .image(img_dependent_data.normal_image.inner())
                     .subresource_range(*img_dependent_data.normal_image.image_subresource_range()),
+                vk::ImageMemoryBarrier::default()
+                    .src_access_mask(vk::AccessFlags::SHADER_READ)
+                    .dst_access_mask(vk::AccessFlags::SHADER_WRITE)
+                    .old_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                    .new_layout(vk::ImageLayout::GENERAL)
+                    .image(img_dependent_data.diffuse_image.inner())
+                    .subresource_range(*img_dependent_data.diffuse_image.image_subresource_range()),
                 vk::ImageMemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::SHADER_READ)
                     .dst_access_mask(vk::AccessFlags::SHADER_WRITE)

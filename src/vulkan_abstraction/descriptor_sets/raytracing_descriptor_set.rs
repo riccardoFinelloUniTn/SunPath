@@ -18,8 +18,9 @@ impl RaytracingDescriptorSetLayout {
     pub const SAMPLERS_BINDING: u32 = 4;
     pub const DEPTH_BINDING: u32 = 5;
     pub const NORMAL_BINDING: u32 = 6;
-    pub const MOTION_VECTOR_BINDING: u32 = 7;
-    pub const NUMBER_OF_BINDINGS: usize = 8;
+    pub const DIFFUSE_BINDING: u32 = 7;
+    pub const MOTION_VECTOR_BINDING: u32 = 8;
+    pub const NUMBER_OF_BINDINGS: usize = 9;
 
 
     pub const NUMBER_OF_SAMPLERS: u32 = vulkan_abstraction::ShaderDataBuffers::NUMBER_OF_SAMPLERS as u32;
@@ -68,6 +69,11 @@ impl RaytracingDescriptorSetLayout {
             // normal layout binding
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::NORMAL_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::DIFFUSE_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
@@ -122,6 +128,7 @@ impl RaytracingDescriptorSets {
         output_image: &vulkan_abstraction::Image,       // Changed from ImageView to Image
         depth_image: &vulkan_abstraction::Image,
         normal_image: &vulkan_abstraction::Image,
+        diffuse_image: &vulkan_abstraction::Image,
         motion_vector_image: &vulkan_abstraction::Image,
         shader_data: &vulkan_abstraction::ShaderDataBuffers,
     ) -> SrResult<Self> {
@@ -132,7 +139,7 @@ impl RaytracingDescriptorSets {
                 .descriptor_count(1),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_IMAGE)
-                .descriptor_count(4), // 1 Output + 1 Depth + 1 Normal + 1 Motion Vector
+                .descriptor_count(5), // 1 Output + 1 Depth + 1 Normal + 1 Motion Vector + 1 Diffuse
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(1),
@@ -187,6 +194,7 @@ impl RaytracingDescriptorSets {
         let output_info = create_info(output_image);
         let depth_info = create_info(depth_image);
         let normal_info = create_info(normal_image);
+        let diffuse_info = create_info(diffuse_image);
         let mv_info = create_info(motion_vector_image);
 
         // Write Output Image
@@ -204,7 +212,7 @@ impl RaytracingDescriptorSets {
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(&depth_info)
                 .dst_set(descriptor_sets[0])
-                .dst_binding(RaytracingDescriptorSetLayout::DEPTH_BINDING), // Make sure this constant exists! (e.g., 7)
+                .dst_binding(RaytracingDescriptorSetLayout::DEPTH_BINDING),
         );
 
         // Write Normal Image
@@ -213,7 +221,15 @@ impl RaytracingDescriptorSets {
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(&normal_info)
                 .dst_set(descriptor_sets[0])
-                .dst_binding(RaytracingDescriptorSetLayout::NORMAL_BINDING), // Make sure this constant exists! (e.g., 8)
+                .dst_binding(RaytracingDescriptorSetLayout::NORMAL_BINDING),
+        );
+
+        push_write(
+            vk::WriteDescriptorSet::default()
+                .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+                .image_info(&diffuse_info)
+                .dst_set(descriptor_sets[0])
+                .dst_binding(RaytracingDescriptorSetLayout::DIFFUSE_BINDING),
         );
 
         // Write Motion Vector Image
@@ -222,8 +238,10 @@ impl RaytracingDescriptorSets {
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(&mv_info)
                 .dst_set(descriptor_sets[0])
-                .dst_binding(RaytracingDescriptorSetLayout::MOTION_VECTOR_BINDING), // Make sure this constant exists! (e.g., 9)
+                .dst_binding(RaytracingDescriptorSetLayout::MOTION_VECTOR_BINDING),
         );
+
+
 
 
         // write matrices uniform buffer to descriptor set

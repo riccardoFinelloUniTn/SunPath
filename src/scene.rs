@@ -4,6 +4,7 @@ use crate::{error::SrResult, vulkan_abstraction};
 
 use ash::vk;
 use nalgebra as na;
+use crate::vulkan_abstraction::gltf::EmissiveTriangle;
 
 type BlasInstanceInfo = (usize, na::Matrix4<f32>);
 
@@ -38,11 +39,13 @@ impl Scene {
         Vec<vulkan_abstraction::gltf::Texture>,
         Vec<vulkan_abstraction::image::Sampler>,
         Vec<vulkan_abstraction::Image>,
+
     )> {
         blases.clear();
 
         let mut blas_instances_info = vec![];
         let mut materials = vec![];
+        let mut emissive_triangles = vec![];
 
         let mut primitives_blas_index: HashMap<vulkan_abstraction::gltf::PrimitiveUniqueKey, usize> = HashMap::new();
         for node in self.nodes() {
@@ -54,6 +57,7 @@ impl Scene {
                 &mut primitives_blas_index,
                 &mut materials,
                 &mut scene_data,
+                &mut emissive_triangles,
             )?;
         }
 
@@ -101,6 +105,7 @@ impl Scene {
         primitives_blas_index: &mut HashMap<vulkan_abstraction::gltf::PrimitiveUniqueKey, usize>,
         materials: &mut Vec<vulkan_abstraction::gltf::Material>,
         scene_data: &mut crate::SceneData,
+        emissive_triangles: &mut Vec<EmissiveTriangle>
     ) -> SrResult<()> {
         if let Some(mesh) = node.mesh() {
             for primitive in mesh.primitives() {
@@ -124,6 +129,36 @@ impl Scene {
                         blas_index
                     }
                 };
+
+                if !primitive.local_emissive_triangles.is_empty() {
+                    let material = &primitive.material;
+                    let node_transform_matrix = node.transform();
+
+                    let emission = [
+                        material.emissive_factor[0] * material.emissive_strength,
+                        material.emissive_factor[1] * material.emissive_strength,
+                        material.emissive_factor[2] * material.emissive_strength,
+                        0.0
+                    ];
+
+                    for local_tri in &primitive.local_emissive_triangles {
+                        // Apply this specific instance's transform
+                        let world_v0 = node_transform_matrix * local_tri[0];
+                        let world_v1 = node_transform_matrix * local_tri[1];
+                        let world_v2 = node_transform_matrix * local_tri[2];
+
+                        let edge1 = world_v1.xyz() - world_v0.xyz();
+                        let edge2 = world_v2.xyz() - world_v0.xyz();
+                        let area = edge1.cross(&edge2).norm() * 0.5;
+
+                        emissive_triangles.push(EmissiveTriangle {
+                            v0: [world_v0.x, world_v0.y, world_v0.z, area],
+                            v1: [world_v1.x, world_v1.y, world_v1.z, 0.0],
+                            v2: [world_v2.x, world_v2.y, world_v2.z, 0.0],
+                            emission,
+                        });
+                    }
+                }
 
                 materials.push(primitive.material.clone());
 
@@ -151,6 +186,7 @@ impl Scene {
                     primitives_blas_index,
                     materials,
                     scene_data,
+                    emissive_triangles,
                 )? // mut borrow
             }
         }

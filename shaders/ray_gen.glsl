@@ -9,7 +9,8 @@ layout(set = 0, binding = 1, r11f_g11f_b10f) uniform image2D raw_color_image; //
 
 layout(set = 0, binding = 5, r16f) uniform image2D depth_image;
 layout(set = 0, binding = 6, rgba8_snorm) uniform image2D normal_image;
-layout(set = 0, binding = 7, rg16f) uniform image2D motion_vector_image;
+layout(set = 0, binding = 7, r11f_g11f_b10f) uniform image2D diffuse_image;
+layout(set = 0, binding = 8, rg16f) uniform image2D motion_vector_image;
 
 layout(location = 0) rayPayloadEXT ray_payload_t prd;
 
@@ -101,6 +102,7 @@ void main() {
             if (bounce == 0) {
                 imageStore(depth_image, ivec2(gl_LaunchIDEXT.xy), vec4(prd.dist, 0.0, 0.0, 0.0));
                 imageStore(normal_image, ivec2(gl_LaunchIDEXT.xy), vec4(hit_normal, 0.0));
+                imageStore(diffuse_image, ivec2(gl_LaunchIDEXT.xy), vec4(hit_albedo, 0.0));
 
                 vec3 world_pos = rayOrigin + rayDir * prd.dist;
                 vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(world_pos, 1.0);

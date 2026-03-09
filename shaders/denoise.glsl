@@ -10,7 +10,8 @@ layout(push_constant) uniform PushConstants {
 layout(set = 0, binding = 0, r11f_g11f_b10f) uniform readonly image2D temporal_result; // Input
 layout(set = 0, binding = 1) uniform sampler2D depth_image;
 layout(set = 0, binding = 2) uniform sampler2D normal_image;
-layout(set = 0, binding = 3, r11f_g11f_b10f) uniform writeonly image2D spatial_output;
+layout(set = 0, binding = 3) uniform sampler2D diffuse_image;
+layout(set = 0, binding = 4, r11f_g11f_b10f) uniform writeonly image2D spatial_output;
 
 float get_luminance(vec3 color) {
     return dot(color, vec3(0.2126, 0.7152, 0.0722)); // [cite: 62]
@@ -35,22 +36,28 @@ void main() {
     }
 
     vec3 center_normal = texelFetch(normal_image, pixel_coords, 0).rgb;
+    vec3 center_diffuse = texelFetch(diffuse_image, pixel_coords, 0).rgb;
 
     //imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
     //return;
 
-    vec3 sum_color = vec3(0.0);
-    float sum_weight = 0.0; // [cite: 69]
+    float center_weight = kernel[2] * kernel[2];
+    vec3 sum_color = center_color * center_weight;
+    float sum_weight = center_weight;
+
+
 
     float DEPTH_SENSITIVITY = 4;
-    float NORMAL_SENSITIVITY = 80.0; // Tighter angle rejection
+    float NORMAL_SENSITIVITY = 80.0;
+    float DIFFUSE_SENSITIVITY = 50.0;
 
     float center_luma = get_luminance(center_color);
 
     for (int y = -2; y <= 2; ++y) {
         for (int x = -2; x <= 2; ++x) {
             ivec2 sample_offset = ivec2(x, y) * pc.step_width;
-            ivec2 sample_coord = clamp(pixel_coords + sample_offset, ivec2(0), size - 1);
+
+            ivec2 sample_coord = pixel_coords + sample_offset;
 
             if (sample_coord.x < 0 || sample_coord.y < 0 ||
             sample_coord.x >= size.x || sample_coord.y >= size.y) {
@@ -61,18 +68,25 @@ void main() {
             float sample_depth = texelFetch(depth_image, sample_coord, 0).r;
             vec3 sample_normal = texelFetch(normal_image, sample_coord, 0).rgb;
 
+            vec3 sample_diffuse = texelFetch(diffuse_image, sample_coord, 0).rgb;
+
             float sample_luma = get_luminance(sample_color);
 
             // Edge-stopping weights
             float w_depth = exp(-abs(center_depth - sample_depth) * DEPTH_SENSITIVITY);
             float w_normal = exp((dot(center_normal, sample_normal) - 1.0) * NORMAL_SENSITIVITY);
 
+            float diffuse_diff = distance(center_diffuse, sample_diffuse);
             float luma_diff = abs(center_luma - sample_luma);
             float luma_sigma = max(center_luma, sample_luma) * 0.4 + 0.01;
-            float w_luma = exp(-luma_diff / luma_sigma);
 
-            // Combine
-            float weight = w_depth * w_normal * w_luma * kernel[x + 2] * kernel[y + 2];
+            float combined_power =
+            -abs(center_depth - sample_depth) * DEPTH_SENSITIVITY
+            + (dot(center_normal, sample_normal) - 1.0) * NORMAL_SENSITIVITY
+            - diffuse_diff * DIFFUSE_SENSITIVITY
+            - (luma_diff / luma_sigma);
+
+            float weight = exp(combined_power) * kernel[x + 2] * kernel[y + 2];
 
             sum_color += sample_color * weight;
             sum_weight += weight;
@@ -81,5 +95,5 @@ void main() {
 
     vec3 spatially_denoised_color = sum_color / max(sum_weight, 0.0001);
 
-    imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
+    imageStore(spatial_output, pixel_coords, vec4(spatially_denoised_color, 1.0));
 }

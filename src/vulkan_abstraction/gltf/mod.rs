@@ -14,6 +14,7 @@ pub mod node;
 pub mod primitive;
 pub mod texture;
 pub mod vertex;
+pub mod emissive_triangle;
 
 pub use image::*;
 pub use material::*;
@@ -22,6 +23,7 @@ pub use node::*;
 pub use primitive::*;
 pub use texture::*;
 pub use vertex::*;
+pub use emissive_triangle::*;
 
 macro_rules! get_texture_indices {
     ($material:ident, $texture_name:ident) => {
@@ -210,7 +212,7 @@ impl Gltf {
 
             let primitive_unique_key = (vertex_position_accessor_index, indices_accessor_index);
 
-            let (material, tex_coords) = {
+            let (material, tex_coords, local_emissive_triangles) = {
                 let material = primitive.material();
                 let material_pbr = primitive.material().pbr_metallic_roughness();
 
@@ -261,7 +263,35 @@ impl Gltf {
                     emissive_tex_coord_index,
                 );
 
-                (material, tex_coords)
+                let mut local_emissive_triangles = Vec::new();
+
+                let is_emissive = material.emissive_strength > 0.0 || material.emissive_factor != [0.0, 0.0, 0.0];
+
+                if is_emissive {
+                    let reader = primitive.reader(|buffer| Some(&self.buffers[buffer.index()]));
+
+                    let positions: Vec<_> = reader.read_positions().unwrap().collect();
+
+                    let indices: Vec<u32> = if let Some(iter) = reader.read_indices() {
+                        iter.into_u32().collect()
+                    } else {
+                        (0..positions.len() as u32).collect()
+                    };
+
+                    for chunk in indices.chunks_exact(3) {
+                        let p0 = positions[chunk[0] as usize];
+                        let p1 = positions[chunk[1] as usize];
+                        let p2 = positions[chunk[2] as usize];
+
+                        local_emissive_triangles.push([
+                            na::Vector4::new(p0[0], p0[1], p0[2], 1.0),
+                            na::Vector4::new(p1[0], p1[1], p1[2], 1.0),
+                            na::Vector4::new(p2[0], p2[1], p2[2], 1.0),
+                        ]);
+                    }
+                }
+
+                (material, tex_coords, local_emissive_triangles)
             };
 
             if !primitive_data_map.contains_key(&primitive_unique_key) {
@@ -320,6 +350,7 @@ impl Gltf {
             primitives.push(vulkan_abstraction::gltf::Primitive {
                 unique_key: primitive_unique_key,
                 material,
+                local_emissive_triangles
             });
         }
 

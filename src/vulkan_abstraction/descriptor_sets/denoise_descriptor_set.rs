@@ -12,9 +12,10 @@ impl DenoiseDescriptorSetLayout {
     pub const INPUT_BINDING: u32 = 0; // Input from Temporal Pass
     pub const DEPTH_BINDING: u32 = 1;           // Edge preservation
     pub const NORMAL_BINDING: u32 = 2;          // Edge preservation
-    pub const FINAL_OUTPUT_BINDING: u32 = 3;    // Final image to the screen
+    pub const DIFFUSE_BINDING: u32 = 3;         //edge preservation
+    pub const FINAL_OUTPUT_BINDING: u32 = 4;    // Final image to the screen
 
-    pub const NUMBER_OF_BINDINGS: usize = 4;
+    pub const NUMBER_OF_BINDINGS: usize = 5;
 
     pub fn new(core: Rc<vulkan_abstraction::Core>) -> SrResult<Self> {
         let device = core.device().inner();
@@ -37,6 +38,13 @@ impl DenoiseDescriptorSetLayout {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
+
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::DIFFUSE_BINDING)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::COMPUTE),
+
 
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::FINAL_OUTPUT_BINDING)
@@ -90,6 +98,7 @@ impl DenoiseDescriptorSets {
         temporal_results: &[vulkan_abstraction::Image; 2],
         depth_image: &vulkan_abstraction::Image,
         normal_image: &vulkan_abstraction::Image,
+        diffuse_image: &vulkan_abstraction::Image,
         denoise_ping_pong_images: &[vulkan_abstraction::Image; 2],
         sampler: vk::Sampler,
     ) -> SrResult<Self> {
@@ -102,7 +111,7 @@ impl DenoiseDescriptorSets {
                 .descriptor_count(6),
                 vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(6),
+                .descriptor_count(9),
         ];
 
         let pool_info = vk::DescriptorPoolCreateInfo::default()
@@ -135,6 +144,7 @@ impl DenoiseDescriptorSets {
         // Common Textures
         let depth_info = create_sampled_info(depth_image);
         let normal_info = create_sampled_info(normal_image);
+        let diffuse_info = create_sampled_info(diffuse_image);
 
         // Ping-Pong specific infos
         let temp_0 = create_info(&temporal_results[0]);
@@ -162,6 +172,7 @@ impl DenoiseDescriptorSets {
         for &set in &descriptor_sets {
             writes.push(self::create_write(set, DenoiseDescriptorSetLayout::DEPTH_BINDING, &depth_info, vk::DescriptorType::COMBINED_IMAGE_SAMPLER));
             writes.push(self::create_write(set, DenoiseDescriptorSetLayout::NORMAL_BINDING, &normal_info,  vk::DescriptorType::COMBINED_IMAGE_SAMPLER));
+            writes.push(create_write(set, DenoiseDescriptorSetLayout::DIFFUSE_BINDING, &normal_info,  vk::DescriptorType::COMBINED_IMAGE_SAMPLER))
         }
 
         unsafe { device.update_descriptor_sets(&writes, &[]) };
