@@ -11,7 +11,7 @@ layout(set = 0, binding = 5, r16f) uniform image2D depth_image;
 layout(set = 0, binding = 6, rgba8_snorm) uniform image2D normal_image;
 layout(set = 0, binding = 7, r11f_g11f_b10f) uniform image2D diffuse_image;
 layout(set = 0, binding = 8, rg16f) uniform image2D motion_vector_image;
-
+layout(set = 0, binding = 10) uniform sampler2D blue_noise_tex;
 layout(location = 0) rayPayloadEXT ray_payload_t prd;
 //layout(location = 1) rayPayloadEXT bool is_shadow_miss;
 
@@ -27,9 +27,7 @@ void init_rng(vec2 pixel, uint frame) {
     seed = uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + frame * 26699u;
 }
 
-vec3 get_random_bounce(vec3 normal) {
-    float r1 = rnd();
-    float r2 = rnd();
+vec3 get_random_bounce(vec3 normal, float r1, float r2) {
     float phi = 2.0 * 3.14159 * r1;
     float r = sqrt(r2);
     vec3 u = normalize(cross(abs(normal.x) > 0.1 ? vec3(0, 1, 0) : vec3(1, 0, 0), normal));
@@ -65,6 +63,10 @@ void main() {
 
     vec3 primary_albedo = vec3(1.0);
 
+    ivec2 tex_size = textureSize(blue_noise_tex, 0);
+    ivec2 noise_coord = ivec2(gl_LaunchIDEXT.xy) % tex_size;
+    vec4 blue_noise = texelFetch(blue_noise_tex, noise_coord, 0);
+
     for(int i = 0; i < SAMPLES; i++){
         const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
         const vec2 inUV = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
@@ -84,10 +86,16 @@ void main() {
         float virtual_dist = 0.0;
         bool gbuffer_written = false;
 
-
+        bool in_glass = false;
 
         for (int bounce = 0; bounce < BOUNCES; bounce++) {
-            traceRayEXT(tlas, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0, rayOrigin, 0.001, rayDir, 10000.0, 0);
+
+            uint ray_flags = gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT;
+            if (in_glass) {
+                ray_flags = gl_RayFlagsOpaqueEXT; // Drop the cull flag
+            }
+
+            traceRayEXT(tlas, ray_flags, 0xFF, 0, 0, 0, rayOrigin, 0.001, rayDir, 10000.0, 0);
 
             bool is_sky = (prd.dist < 0.0);
 
@@ -135,7 +143,7 @@ void main() {
 
                     primary_albedo = hit_albedo;
 
-                    // Write the Reflected Depth, Normal, and Diffuse!
+                    // Write the Reflected Depth, Normal, and Diffuse
                     imageStore(depth_image, ivec2(gl_LaunchIDEXT.xy), vec4(virtual_dist, 0.0, 0.0, 0.0));
                     imageStore(normal_image, ivec2(gl_LaunchIDEXT.xy), vec4(hit_normal, roughness));
                     imageStore(diffuse_image, ivec2(gl_LaunchIDEXT.xy), vec4(hit_albedo, 0.0));
@@ -187,6 +195,7 @@ void main() {
                 } else {
                     // Refraction
                     rayDir = refracted;
+                    in_glass != is_inside;
 
                     // Beer-Lambert Law (Volumetric Absorption)
                     if (is_inside) {
@@ -231,7 +240,7 @@ void main() {
                 float cos_theta_surface = max(dot(hit_normal, shadow_ray_dir), 0.0);
 
                 if (cos_theta_light > 0.0 && cos_theta_surface > 0.0) {
-                    uint ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT;
+                    uint ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT;
                     prd.dist = 1.0;
 
                     traceRayEXT(tlas, ray_flags, 0xFF, 0, 0, 0, hitPos, 0.001, shadow_ray_dir, light_dist - 0.001, 0);
@@ -258,17 +267,26 @@ void main() {
 
             float p_specular = clamp(max(F.r, max(F.g, F.b)), 0.05, 1.0);
 
+            float r1, r2;
+            if (bounce == 0) {
+                r1 = fract(blue_noise.r + float(frame_count % 1024) * 0.618034);
+                r2 = fract(blue_noise.g + float(frame_count % 1024) * 0.618034);
+            } else {
+                r1 = rnd();
+                r2 = rnd();
+            }
+
             if (rnd() < p_specular) {
-                vec3 H = get_ggx_microfacet(N, roughness, rnd(), rnd());
+                vec3 H = get_ggx_microfacet(N, roughness, r1, r2);
                 rayDir = reflect(-V, H);
 
                 if (dot(N, rayDir) <= 0.0) {
-                    rayDir = get_random_bounce(N);
+                    rayDir = get_random_bounce(N, r1, r2);
                 }
 
                 throughput *= (F / p_specular);
             } else {
-                rayDir = get_random_bounce(N);
+                rayDir = get_random_bounce(N, r1, r2);
                 throughput *= hit_albedo * (1.0 - metallic) * (1.0 - F) / (1.0 - p_specular);
             }
 
