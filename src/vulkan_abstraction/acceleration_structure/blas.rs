@@ -67,11 +67,11 @@ impl BLAS {
         // there must be one build_range_info for each geometry
         let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR::default()
             // the value of first_vertex is added to index values before fetching verts
-            .first_vertex(0 as u32)
+            .first_vertex(0u32)
             // the number of triangles to read (3 * the number of indices to read)
             .primitive_count((index_buffer.len() / 3) as u32)
             // an offset (in bytes) into geometry.geometry_data.index_data from which to start reading
-            .primitive_offset(0 as u32)
+            .primitive_offset(0u32)
             // transform_offset is an offset (in bytes) into geometry.geometry_data.transform_data
             .transform_offset(0);
 

@@ -15,8 +15,8 @@ pub struct TLAS {
 }
 
 impl TLAS {
-    pub fn new(core: Rc<vulkan_abstraction::Core>, blas_instances: &[vulkan_abstraction::BlasInstance]) -> SrResult<Self> {
-        let instances_buffer = Self::make_instances_buffer(Rc::clone(&core), blas_instances)?;
+    pub fn new(core: Rc<vulkan_abstraction::Core>, blas_instances: &[vulkan_abstraction::BlasInstance], instances_buffer: & mut vulkan_abstraction::Buffer) -> SrResult<Self> {
+        Self::insert_in_instances_buffer(Rc::clone(&core), blas_instances, instances_buffer)?;
 
         let geometry = Self::make_geometry(&instances_buffer);
 
@@ -45,8 +45,8 @@ impl TLAS {
     /// - Change one or more transform matrices
     /// - switch one BLAS instance for another, possibly to switch LODs
     #[allow(unused)]
-    pub fn update(&mut self, blas_instances: &[vulkan_abstraction::BlasInstance]) -> SrResult<()> {
-        let instances_buffer = Self::make_instances_buffer(Rc::clone(self.tlas.core()), blas_instances)?;
+    pub fn update(&mut self, blas_instances: &[vulkan_abstraction::BlasInstance] , instances_buffer: & mut vulkan_abstraction::Buffer ) -> SrResult<()> {
+        Self::insert_in_instances_buffer(Rc::clone(self.tlas.core()), blas_instances , instances_buffer)?;
 
         let geometry = Self::make_geometry(&instances_buffer);
 
@@ -58,8 +58,8 @@ impl TLAS {
     }
 
     #[allow(unused)]
-    pub fn rebuild(&mut self, blas_instances: &[vulkan_abstraction::BlasInstance]) -> SrResult<()> {
-        let instances_buffer = Self::insert_in_instances_buffer(Rc::clone(self.tlas.core()), blas_instances)?;
+    pub fn rebuild(&mut self, blas_instances: &[vulkan_abstraction::BlasInstance] , instances_buffer: & mut vulkan_abstraction::Buffer) -> SrResult<()> {
+        Self::insert_in_instances_buffer(Rc::clone(self.tlas.core()), blas_instances , instances_buffer)?;
 
         let geometry = Self::make_geometry(&instances_buffer);
 
@@ -70,12 +70,12 @@ impl TLAS {
         Ok(())
     }
 
-    //TODO questo deve essere diviso in oggetti statici e non per ottimizzare al meglio l'allocazione
-    fn insert_in_instances_buffer(
+    //TODO questo deve essere diviso in oggetti statici e non per ottimizzare al meglio l'allocazione e cosa succede se fallisce
+    fn insert_in_instances_buffer<'a>(
         core: Rc<vulkan_abstraction::Core>,
         blas_instances: &[vulkan_abstraction::BlasInstance],
-        instances_buffer: &mut vulkan_abstraction::Buffer,
-    ) -> SrResult<vulkan_abstraction::Buffer> {
+        instances_buffer: & mut vulkan_abstraction::Buffer,
+    ) -> SrResult<()> {
         let blas_instances: Vec<vk::AccelerationStructureInstanceKHR> = blas_instances
             .iter()
             .map(|blas_instance| {
@@ -120,7 +120,7 @@ impl TLAS {
             };
         }
 
-        Ok(instances_buffer)
+        Ok(())
     }
 
     fn make_geometry(instances_buffer: &vulkan_abstraction::Buffer) -> vk::AccelerationStructureGeometryKHR<'_> {

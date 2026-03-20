@@ -16,9 +16,7 @@ use ash::vk;
 use crate::utils::env_var_as_bool;
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
-use crate::vulkan_abstraction::{
-    BlasMetaData, Buffer, DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets, PostprocessPass, TemporalPass,
-};
+use crate::vulkan_abstraction::{BlasInstance, BlasMetaData, Buffer, DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets, PostprocessPass, TemporalPass};
 
 pub const DENOISE_PASSES: u32 = 5;
 
@@ -63,7 +61,7 @@ pub struct Renderer {
     blases: Vec<vulkan_abstraction::BLAS>,
     tlas: vulkan_abstraction::TLAS,
 
-    instance_buffer: vulkan_abstraction::Buffer,
+    instances_buffer: vulkan_abstraction::Buffer,
     cpu_instances_data: Vec<vulkan_abstraction::BlasMetaData>,
 
     scene_images: Vec<vulkan_abstraction::Image>,
@@ -134,8 +132,18 @@ impl Renderer {
 
         let image_extent = utils::tuple_to_extent3d(image_extent);
 
+        let mut instances_buffer = vulkan_abstraction::Buffer::new::<vk::AccelerationStructureInstanceKHR>(
+            Rc::clone(&core),
+            MAX_TLAS_INSTANCES, // Numero di elementi (Vulkan Instances), NON i byte!
+            gpu_allocator::MemoryLocation::CpuToGpu, // Memoria mappabile dalla CPU per aggiornamenti veloci
+            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            "Persistent TLAS Instances Buffer",
+        )?; //TODO const value a caso
+
+
         let blases = vec![];
-        let tlas = vulkan_abstraction::TLAS::new(Rc::clone(&core), &[])?;
+        let tlas = vulkan_abstraction::TLAS::new(Rc::clone(&core), &[] ,&mut instances_buffer )?;
 
         //must be filled by loading a scene
         let shader_data_buffers = vulkan_abstraction::ShaderDataBuffers::new_empty(Rc::clone(&core))?;
@@ -247,14 +255,7 @@ impl Renderer {
 
                 blases,
                 tlas,
-                instance_buffer: vulkan_abstraction::Buffer::new::<vk::AccelerationStructureInstanceKHR>(
-                    Rc::clone(&core),
-                    MAX_TLAS_INSTANCES, // Numero di elementi (Vulkan Instances), NON i byte!
-                    gpu_allocator::MemoryLocation::CpuToGpu, // Memoria mappabile dalla CPU per aggiornamenti veloci
-                    vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                        | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-                    "Persistent TLAS Instances Buffer",
-                )?, //TODO const value a caso
+                instances_buffer,
                 cpu_instances_data: Vec::new(),
 
                 scene_images: Vec::new(),
@@ -600,7 +601,7 @@ impl Renderer {
             scene.load_into_gpu(&self.core, &mut self.blases, scene_data)?;
 
         let fallback_texture = vulkan_abstraction::Texture(&self.fallback_texture_image, &self.fallback_texture_sampler);
-        self.tlas.rebuild(&blas_instances)?;
+        self.tlas.rebuild(&blas_instances,&mut self.instances_buffer)?;
         self.shader_data_buffers.update(
             &blas_instances,
             &materials,
@@ -1486,9 +1487,9 @@ impl Renderer {
         &self.core
     }
 
-    /// Updates the local CPU copy of an object's transform
+    /// Updates the local CPU copy of an object's transform TODO temp gemini
     pub fn set_object_transform(&mut self, instance_id: usize, transform: nalgebra::Matrix4<f32>) {
-        if instance_id >= self.blas_instances.len() {
+        if instance_id >= self.cpu_instances_data.len() {
             log::warn!("Attempted to update invalid instance ID: {}", instance_id);
             return;
         }
@@ -1511,15 +1512,23 @@ impl Renderer {
             ],
         };
 
-        self.blas_instances[instance_id].transform = vk_transform;
+        self.cpu_instances_data[instance_id].transform = vk_transform;
     }
 
-    /// Call this ONCE per frame before `render_to_image` if any objects moved
+    /// Call this ONCE per frame before `render_to_image` if any objects moved //TODO questo rebuild serve per testing della scena in movimento
     pub fn rebuild_tlas(&mut self) -> SrResult<()> {
         // This pushes the updated array to the GPU and rebuilds the TLAS.
         // NOTE: For better performance later, you can swap `rebuild` for an `update`
         // command if your TLAS abstraction supports VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
-        self.tlas.rebuild(&self.blas_instances)?;
+
+        let blas_instances = &self.cpu_instances_data.iter().enumerate().map(|(index, cpu_instance)|{
+            BlasInstance{
+                blas: &self.blases[index],
+                transform: cpu_instance.transform,
+                blas_instance_index: cpu_instance.blas_instance_index,
+            }
+        }).collect::<Vec<_>>();
+        self.tlas.rebuild(blas_instances, &mut self.instances_buffer )?;
         Ok(())
     }
 }
