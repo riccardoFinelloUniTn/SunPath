@@ -13,7 +13,7 @@ use std::{collections::HashMap, rc::Rc};
 use ash::vk;
 
 use crate::utils::env_var_as_bool;
-use crate::vulkan_abstraction::{DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets, PostprocessPass, TemporalPass};
+use crate::vulkan_abstraction::{DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets, PostprocessPass, Reservoir, TemporalPass};
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
 
@@ -474,6 +474,26 @@ impl Renderer {
                 "sunray motion vector image",
             )?;
 
+            let num_pixels = (self.image_extent.width * self.image_extent.height) as usize;
+
+            let reservoir_buffer_a = vulkan_abstraction::Buffer::new::<Reservoir>(
+                Rc::clone(&self.core),
+                num_pixels,
+                gpu_allocator::MemoryLocation::GpuOnly,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                "ReSTIR Reservoir Buffer A"
+            )?;
+
+            let reservoir_buffer_b = vulkan_abstraction::Buffer::new::<Reservoir>(
+                Rc::clone(&self.core),
+                num_pixels,
+                gpu_allocator::MemoryLocation::GpuOnly,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                "ReSTIR Reservoir Buffer B"
+            )?;
+
+            let reservoir_buffers = [reservoir_buffer_a, reservoir_buffer_b];
+
             //Initializer block for g buffer images
             {
                 let device = self.core.device().inner();
@@ -555,7 +575,9 @@ impl Renderer {
                 &motion_vector_image,   // G-Buffer Motion
                 &self.blue_noise_image,
                 self.blue_noise_sampler.inner(),
+                &reservoir_buffers,
                 &self.shader_data_buffers,
+
             )?;
 
             let temporal_accumulation_descriptor_sets = vulkan_abstraction::TemporalAccumulationDescriptorSets::new(
