@@ -60,10 +60,16 @@ fn main() {
     println!("cargo::rerun-if-changed=shaders/");
 
     compile_shader(
-        "shaders/ray_gen.glsl",
+        "shaders/ray_gen_ris.glsl",
         shaderc::ShaderKind::RayGeneration,
         false,
-        "ray_gen.spirv",
+        "ray_gen_ris.spirv",
+    );
+    compile_shader(
+        "shaders/ray_gen_final.glsl",
+        shaderc::ShaderKind::RayGeneration,
+        false,
+        "ray_gen_final.spirv",
     );
     compile_shader(
         "shaders/closest_hit.glsl",

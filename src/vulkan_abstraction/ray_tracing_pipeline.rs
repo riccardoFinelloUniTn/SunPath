@@ -28,7 +28,7 @@ impl RayTracingPipeline {
         core: Rc<vulkan_abstraction::Core>,
         descriptor_set_layout: &vulkan_abstraction::RaytracingDescriptorSetLayout,
         generate_debug_info: bool,
-
+        ray_gen_spirv: &[u8],
     ) -> SrResult<Self> {
         if generate_debug_info {
             log::info!("Building shaders with debug symbols");
@@ -57,7 +57,7 @@ impl RayTracingPipeline {
 
         let ray_gen_stage_create_info = make_shader_stage_create_info(
             vk::ShaderStageFlags::RAYGEN_KHR,
-            include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/ray_gen.spirv")),
+            ray_gen_spirv
         )?;
 
         let ray_miss_stage_create_info = make_shader_stage_create_info(

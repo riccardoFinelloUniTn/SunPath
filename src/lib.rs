@@ -157,6 +157,7 @@ impl Renderer {
             Rc::clone(&core),
             &ray_tracing_descriptor_set_layout,
             env_var_as_bool(ENABLE_SHADER_DEBUG_SYMBOLS_ENV_VAR).unwrap_or(IS_DEBUG_BUILD),
+            include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/ray_gen_ris.spirv"))
         )?;
 
         let shader_binding_table_ris = vulkan_abstraction::ShaderBindingTable::new(&core, &ray_tracing_pipeline_ris)?;
@@ -165,6 +166,7 @@ impl Renderer {
             Rc::clone(&core),
             &ray_tracing_descriptor_set_layout,
             env_var_as_bool(ENABLE_SHADER_DEBUG_SYMBOLS_ENV_VAR).unwrap_or(IS_DEBUG_BUILD),
+            include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/ray_gen_final.spirv"))
         )?;
 
         let shader_binding_table_final = vulkan_abstraction::ShaderBindingTable::new(&core, &ray_tracing_pipeline_final)?;
