@@ -546,8 +546,6 @@ impl Renderer {
                 "sunray motion vector image",
             )?;
 
-            let num_pixels = (self.image_extent.width * self.image_extent.height) as usize;
-
             //Initializer block for g buffer images
             {
                 let device = self.core.device().inner();
@@ -770,6 +768,7 @@ impl Renderer {
     /// that will be signaled when the rendering is finished (which can be used to know when the Semaphore has no pending operations left).
     pub fn render_to_image(&mut self, dst_image: vk::Image, wait_sem: vk::Semaphore) -> SrResult<vk::Fence> {
 
+        unsafe { self.core.device().inner().device_wait_idle().unwrap(); }
 
         if !self.image_dependant_data.contains_key(&dst_image) {
             self.build_image_dependent_data(&[dst_image])?;

@@ -88,7 +88,7 @@ vec3 hit_pos, vec3 hit_normal, vec3 V_view, vec3 hit_albedo, float roughness, fl
 emissive_triangle_t light, vec3 light_pos, vec3 light_normal
 ) {
     vec3 L = light_pos - hit_pos;
-    float dist = length(L);
+    float dist = max(length(L), 0.0001);
     L /= dist;
 
     float NdotL = max(dot(hit_normal, L), 0.0);
@@ -141,7 +141,10 @@ void main() {
     }
 
     vec3 hitPos = rayOrigin + rayDir * prd.dist;
-    seed = floatBitsToUint(hitPos.x) ^ floatBitsToUint(hitPos.y) ^ floatBitsToUint(hitPos.z) ^ frame_count;
+    uint hx = hash(floatBitsToUint(hitPos.x));
+    uint hy = hash(floatBitsToUint(hitPos.y));
+    uint hz = hash(floatBitsToUint(hitPos.z));
+    seed = hash(hx ^ hy ^ hz ^ frame_count);
     vec3 hit_normal = unpack_normal(prd.normal_packed);
     vec3 hit_albedo = unpackUnorm4x8(prd.albedo_packed).rgb;
     vec2 mat_info = unpackHalf2x16(prd.material_info);
@@ -183,6 +186,8 @@ void main() {
         }
 
         // Phase 3: Temporal Reuse
+
+        /*
         if (frame_count > 0) {
             vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(hitPos, 1.0);
             vec2 prev_ndc = prev_clip.xy / prev_clip.w;
@@ -211,8 +216,9 @@ void main() {
             }
         }
 
+        */
     }
 
-    // Write final selection to VRAM for Pass 2 to consume
+
     write_current_reservoir(pixel_coord, current_r);
 }

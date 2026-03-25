@@ -3,6 +3,15 @@
 // necessary since this file uses the texture_samplers uniform in sample_texture
 #include <shaders/common.glsl>
 
+uint hash(uint x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
 // a texture index of ~0 == u32(-1) == 0xffffffff may be passed to indicate that no texture should be used, and the provided value should be used as replacement for all texels
 const uint null_texture = ~0;
 

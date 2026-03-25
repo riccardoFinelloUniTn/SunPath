@@ -194,7 +194,7 @@ void main() {
                 vec3 world_pos = rayOrigin + rayDir * prd.dist;
                 vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(world_pos, 1.0);
                 vec2 prev_ndc = prev_clip.xy / prev_clip.w;
-                vec2 prev_uv = vec2(prev_ndc.x, -prev_ndc.y) * 0.5 + 0.5;
+                vec2 prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
 
                 imageStore(motion_vector_image, ivec2(gl_LaunchIDEXT.xy), vec4(inUV - prev_uv, 0.0, 0.0));
             }
@@ -363,10 +363,11 @@ void main() {
 
         total_radiance += radiance;
         total_radiance = min(total_radiance, 10.0);
+
     }
 
     vec3 current_frame_color = total_radiance / float(SAMPLES);
-    vec3 raw_lighting = current_frame_color / max(primary_albedo, vec3(0.001));
+    vec3 raw_lighting = current_frame_color;
 
     imageStore(raw_color_image, ivec2(gl_LaunchIDEXT.xy), vec4(raw_lighting, 1.0));
 }
