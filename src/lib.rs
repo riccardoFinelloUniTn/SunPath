@@ -38,6 +38,9 @@ struct ImageDependentData {
     motion_vector_image: vulkan_abstraction::Image,
 
     #[allow(unused)]
+    reservoir_buffers: [vulkan_abstraction::Buffer; 2],
+
+    #[allow(unused)]
     pub raytracing_descriptor_sets: vulkan_abstraction::RaytracingDescriptorSets,
     #[allow(unused)]
     pub temporal_accumulation_descriptor_sets: vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSets,
@@ -675,6 +678,7 @@ impl Renderer {
                     motion_vector_image,
                     raytracing_cmd_buf,
                     blit_cmd_buf,
+                    reservoir_buffers,
                     raytracing_descriptor_sets,
                     temporal_accumulation_descriptor_sets,
                     denoise_descriptor_sets,
