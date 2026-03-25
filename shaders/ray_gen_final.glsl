@@ -122,7 +122,8 @@ void main() {
     vec3 primary_albedo = vec3(1.0);
 
     ivec2 tex_size = textureSize(blue_noise_tex, 0);
-    ivec2 noise_coord = ivec2(gl_LaunchIDEXT.xy) % tex_size;
+    ivec2 pan_offset = ivec2(frame_count * 1619, frame_count * 3137);
+    ivec2 noise_coord = ivec2(gl_LaunchIDEXT.xy + pan_offset) % tex_size;
     vec4 blue_noise = texelFetch(blue_noise_tex, noise_coord, 0);
 
     for(int i = 0; i < SAMPLES; i++){
@@ -168,6 +169,9 @@ void main() {
             vec3 hit_normal = unpack_normal(prd.normal_packed);
             vec3 hit_albedo = unpackUnorm4x8(prd.albedo_packed).rgb;
             vec3 hitPos = rayOrigin + rayDir * prd.dist;
+            if (bounce == 0) {
+                seed = floatBitsToUint(hitPos.x) ^ floatBitsToUint(hitPos.y) ^ floatBitsToUint(hitPos.z) ^ frame_count;
+            }
             vec3 V_view = -rayDir;
 
             vec2 mat_info = unpackHalf2x16(prd.material_info);
