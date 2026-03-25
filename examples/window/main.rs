@@ -69,7 +69,7 @@ impl App {
             sunray::Renderer::new_with_surface(size, vk::Format::R8G8B8A8_SRGB, instance_exts, &create_surface)?;
 
         // /heavy_models/Light_Tests
-        renderer.load_gltf("examples/assets/Room2.glb")?;
+        renderer.load_gltf("examples/assets/Lantern.glb")?;
 
         //take ownership of the surface
         let surface = surface::Surface::new(renderer.core().entry(), renderer.core().instance(), surface);
@@ -266,14 +266,14 @@ impl App {
         // update frame data:
         let time = self.time_elapsed();
 
-        let y = 14.0;
-        let dist = 36.0;
+        let y = 7.0;
+        let dist = 20.0;
 
 
         let camera = Camera::default()
             //.set_position(na::Point3::new(0.0, y, dist))
-            //.set_position(na::Point3::new((time * 0.5).sin() * 4.0, y + (time * 2.0).cos() * 2.0, dist -  (time * 0.6).cos() * 4.0))
-            .set_position(na::Point3::new(dist * (time/2.0).cos(), y, dist * (time/2.0).sin()))
+            .set_position(na::Point3::new((time * 0.5).sin() * 4.0, y + (time * 2.0).cos() * 2.0, dist -  (time * 0.6).cos() * 4.0))
+            //.set_position(na::Point3::new(dist * time.cos(), y, dist * time.sin()))
             .set_target(na::Point3::new(0.0, y, 0.0))
             .set_fov_y(45.0);
         self.res_mut().renderer.set_camera(camera)?;

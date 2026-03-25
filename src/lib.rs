@@ -37,8 +37,6 @@ struct ImageDependentData {
     #[allow(unused)]
     motion_vector_image: vulkan_abstraction::Image,
 
-    #[allow(unused)]
-    reservoir_buffers: [vulkan_abstraction::Buffer; 2],
 
     #[allow(unused)]
     pub raytracing_descriptor_sets: vulkan_abstraction::RaytracingDescriptorSets,
@@ -62,6 +60,7 @@ pub struct Renderer {
 
     scene_images: Vec<vulkan_abstraction::Image>,
     scene_samplers: Vec<vulkan_abstraction::Sampler>,
+    reservoir_buffers: [vulkan_abstraction::Buffer; 2],
 
     ///The first pipeline finds the best candidates for each pixel but doesn't trace many rays
 
@@ -216,6 +215,24 @@ impl Renderer {
             create_accum_image("Denoise_Pong")?,
         ];
 
+        let num_pixels = (image_extent.width * image_extent.height) as usize;
+        let reservoir_buffer_a = vulkan_abstraction::Buffer::new::<Reservoir>(
+            Rc::clone(&core),
+            num_pixels,
+            gpu_allocator::MemoryLocation::GpuOnly,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            "ReSTIR Reservoir Buffer A"
+        )?;
+
+        let reservoir_buffer_b = vulkan_abstraction::Buffer::new::<Reservoir>(
+            Rc::clone(&core),
+            num_pixels,
+            gpu_allocator::MemoryLocation::GpuOnly,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            "ReSTIR Reservoir Buffer B"
+        )?;
+        let reservoir_buffers = [reservoir_buffer_a, reservoir_buffer_b];
+
         let blue_noise_bytes = include_bytes!("../src/util_files/noise.png");
         let blue_noise_img = image::load_from_memory(blue_noise_bytes).unwrap().to_rgba8();
         let (noise_width, noise_height) = blue_noise_img.dimensions();
@@ -298,6 +315,8 @@ impl Renderer {
             Self {
                 image_dependant_data,
 
+                reservoir_buffers,
+
                 shader_binding_table_ris,
                 ray_tracing_pipeline_ris,
                 shader_binding_table_final,
@@ -346,6 +365,26 @@ impl Renderer {
             return Ok(());
         }
         self.clear_image_dependent_data();
+
+        let num_pixels = (new_extent.width * new_extent.height) as usize;
+        let reservoir_buffer_a = vulkan_abstraction::Buffer::new::<Reservoir>(
+            self.core.clone(),
+            num_pixels,
+            gpu_allocator::MemoryLocation::GpuOnly,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            "ReSTIR Reservoir Buffer A"
+        )?;
+
+        let reservoir_buffer_b = vulkan_abstraction::Buffer::new::<Reservoir>(
+            self.core.clone(),
+            num_pixels,
+            gpu_allocator::MemoryLocation::GpuOnly,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            "ReSTIR Reservoir Buffer B"
+        )?;
+
+        self.reservoir_buffers = [reservoir_buffer_a, reservoir_buffer_b];
+
         self.image_extent = new_extent;
 
         let create_accum_image = |name: &'static str| -> SrResult<vulkan_abstraction::Image> {
@@ -509,24 +548,6 @@ impl Renderer {
 
             let num_pixels = (self.image_extent.width * self.image_extent.height) as usize;
 
-            let reservoir_buffer_a = vulkan_abstraction::Buffer::new::<Reservoir>(
-                Rc::clone(&self.core),
-                num_pixels,
-                gpu_allocator::MemoryLocation::GpuOnly,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
-                "ReSTIR Reservoir Buffer A"
-            )?;
-
-            let reservoir_buffer_b = vulkan_abstraction::Buffer::new::<Reservoir>(
-                Rc::clone(&self.core),
-                num_pixels,
-                gpu_allocator::MemoryLocation::GpuOnly,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
-                "ReSTIR Reservoir Buffer B"
-            )?;
-
-            let reservoir_buffers = [reservoir_buffer_a, reservoir_buffer_b];
-
             //Initializer block for g buffer images
             {
                 let device = self.core.device().inner();
@@ -608,7 +629,7 @@ impl Renderer {
                 &motion_vector_image,   // G-Buffer Motion
                 &self.blue_noise_image,
                 self.blue_noise_sampler.inner(),
-                &reservoir_buffers,
+                &self.reservoir_buffers,
                 &self.shader_data_buffers,
 
             )?;
@@ -678,7 +699,6 @@ impl Renderer {
                     motion_vector_image,
                     raytracing_cmd_buf,
                     blit_cmd_buf,
-                    reservoir_buffers,
                     raytracing_descriptor_sets,
                     temporal_accumulation_descriptor_sets,
                     denoise_descriptor_sets,
