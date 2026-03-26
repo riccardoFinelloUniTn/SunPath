@@ -142,7 +142,6 @@ void main() {
     float metallic = clamp(mat_info.y, 0.0, 1.0);
     vec3 V_view = -rayDir;
 
-    // --- NEW: Calculate Motion Vectors and Write G-Buffer early! ---
     vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(hitPos, 1.0);
     vec2 prev_ndc = prev_clip.xy / prev_clip.w;
     vec2 prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
@@ -155,7 +154,7 @@ void main() {
     imageStore(diffuse_image, pixel_coord, vec4(denoiser_albedo, 0.0));
     imageStore(motion_vector_image, pixel_coord, vec4(motion_vector, 0.0, 0.0));
 
-    // Phase 2: RIS Initial Audition
+    //RIS Initial Audition
     Reservoir current_r = Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, uint[2](0,0));
     uint num_lights = emissive_triangles.length();
     int RIS_CANDIDATES = 8;
@@ -187,9 +186,8 @@ void main() {
             current_r.W = current_r.w_sum / max(current_r.M * p_hat_winner, 0.0001);
         }
 
-        // Phase 3: Temporal Reuse
+        // Temporal Reuse
         if (frame_count > 0) {
-            // Note: We are reusing the 'prev_uv' calculation we already did above!
             ivec2 prev_coord = ivec2(prev_uv * vec2(gl_LaunchSizeEXT.xy));
 
             if (prev_coord.x >= 0 && prev_coord.y >= 0 && prev_coord.x < gl_LaunchSizeEXT.x && prev_coord.y < gl_LaunchSizeEXT.y) {

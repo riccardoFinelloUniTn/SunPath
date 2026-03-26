@@ -9,6 +9,7 @@ layout(set = 0, binding = 1, r11f_g11f_b10f) uniform image2D raw_color_image;
 layout(set = 0, binding = 5, r16f) uniform image2D depth_image;
 layout(set = 0, binding = 6, rgba8_snorm) uniform image2D normal_image;
 layout(set = 0, binding = 7, r11f_g11f_b10f) uniform image2D diffuse_image;
+layout(set = 0, binding = 8, rg16f) uniform image2D motion_vector_image;
 layout(set = 0, binding = 10) uniform sampler2D blue_noise_tex;
 
 struct Reservoir {
@@ -119,7 +120,7 @@ emissive_triangle_t light, vec3 light_pos, vec3 light_normal
 void main() {
     vec3 total_radiance = vec3(0.0);
     int SAMPLES = 1;
-    int BOUNCES = 20;
+    int BOUNCES = 10;
     int SHADOW_BOUNCES = BOUNCES / 2;
 
     init_rng(gl_LaunchIDEXT.xy, frame_count);
@@ -145,6 +146,9 @@ void main() {
         vec3 radiance   = vec3(0.0);
         bool in_glass = false;
 
+        float primary_hit_dist = 0.0;
+        bool use_virtual_gbuffer = false;
+
         for (int bounce = 0; bounce < BOUNCES; bounce++) {
             uint ray_flags = gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT;
             if (in_glass) {
@@ -156,6 +160,14 @@ void main() {
 
             if (is_sky) {
                 radiance += vec3(0.0, 0.0, 0.0) * throughput;
+
+                if (bounce == 1 && use_virtual_gbuffer) {
+                    imageStore(depth_image, pixel_coord, vec4(100000.0, 0.0, 0.0, 0.0));
+                    imageStore(normal_image, pixel_coord, vec4(0.0));
+                    imageStore(diffuse_image, pixel_coord, vec4(0.0));
+                    imageStore(motion_vector_image, pixel_coord, vec4(0.0));
+                }
+
                 break;
             }
 
@@ -177,6 +189,29 @@ void main() {
             float brightness = max(prd.emission.r, max(prd.emission.g, prd.emission.b));
             if (brightness > 1.0) {
                 break;
+            }
+
+            if (bounce == 0) {
+                primary_hit_dist = prd.dist;
+                if ((metallic > 0.9 && roughness < 0.1) || transmission > 0.5) {
+                    use_virtual_gbuffer = true;
+                }
+            }
+
+            // 2. Perform the Hijack on Bounce 1
+            if (bounce == 1 && use_virtual_gbuffer) {
+                float virtual_dist = primary_hit_dist + prd.dist;
+                vec3 virtual_world_pos = origin.xyz + direction.xyz * virtual_dist;
+                vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(virtual_world_pos, 1.0);
+
+                vec2 prev_ndc = prev_clip.xy / prev_clip.w;
+                vec2 prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
+                vec2 virtual_motion_vector = inUV - prev_uv;
+
+                imageStore(depth_image, pixel_coord, vec4(virtual_dist, 0.0, 0.0, 0.0));
+                imageStore(normal_image, pixel_coord, vec4(hit_normal, roughness));
+                imageStore(diffuse_image, pixel_coord, vec4(hit_albedo, 0.0));
+                imageStore(motion_vector_image, pixel_coord, vec4(virtual_motion_vector, 0.0, 0.0));
             }
 
             if (transmission > 0.5) {

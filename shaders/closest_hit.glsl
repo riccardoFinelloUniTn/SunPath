@@ -47,8 +47,6 @@ void main() {
 
     vec3 final_emission = emissive_sample.rgb * emissive_strength;
 
-    // --- NORMAL MAPPING ---
-    // Transform Geometric Normal to World Space
     vec3 world_normal = normalize(vec3(normal * gl_WorldToObjectEXT));
     vec3 final_normal = world_normal;
 
