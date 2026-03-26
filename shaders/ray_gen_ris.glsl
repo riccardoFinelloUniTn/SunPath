@@ -12,8 +12,6 @@ layout(set = 0, binding = 7, r11f_g11f_b10f) uniform image2D diffuse_image;
 layout(set = 0, binding = 8, rg16f) uniform image2D motion_vector_image;
 layout(set = 0, binding = 10) uniform sampler2D blue_noise_tex;
 
-
-// ReSTIR Structure mathematically aligned to std430
 struct Reservoir {
     uint light_idx;
     uint _pad0[3];
@@ -26,7 +24,6 @@ struct Reservoir {
     uint _pad2[2];
 };
 
-// ReSTIR Ping-Pong Buffers
 layout(std430, set = 0, binding = 11) buffer ReservoirBufferA { Reservoir reservoirs_A[]; };
 layout(std430, set = 0, binding = 12) buffer ReservoirBufferB { Reservoir reservoirs_B[]; };
 layout(location = 0) rayPayloadEXT ray_payload_t prd;
@@ -42,8 +39,6 @@ float rnd() {
 void init_rng(vec2 pixel, uint frame) {
     seed = uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + frame * 26699u;
 }
-
-
 
 uint get_pixel_index(ivec2 coord) {
     return coord.y * gl_LaunchSizeEXT.x + coord.x;
@@ -92,14 +87,12 @@ emissive_triangle_t light, vec3 light_pos, vec3 light_normal
 
     float NdotL = max(dot(hit_normal, L), 0.0);
     float cos_light = max(dot(light_normal, -L), 0.0);
-
     if (NdotL <= 0.0 || cos_light <= 0.0) return vec3(0.0);
 
     vec3 H = normalize(V_view + L);
     float NdotH = max(dot(hit_normal, H), 0.0);
     float VdotH = max(dot(V_view, H), 0.0);
     float NdotV = max(dot(hit_normal, V_view), 0.001);
-
     float a = roughness * roughness;
     float a2 = a * a;
     float denom = (NdotH * NdotH * (a2 - 1.0) + 1.0);
@@ -108,7 +101,6 @@ emissive_triangle_t light, vec3 light_pos, vec3 light_normal
     vec3 F0 = mix(vec3(0.04), hit_albedo, metallic);
     vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
     vec3 specular_brdf = (D * F) / max(4.0 * NdotV * NdotL, 0.001);
-
     vec3 diffuse_brdf = hit_albedo * (1.0 - metallic) / 3.14159;
     float geometry = (NdotL * cos_light) / max(dist * dist, 0.0001);
 
@@ -122,11 +114,9 @@ void main() {
     const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
     const vec2 inUV = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
     vec2 d = inUV * 2.0 - 1.0;
-
     vec4 origin    = matrices_uniform_buffer.view_inverse * vec4(0, 0, 0, 1);
     vec4 target    = matrices_uniform_buffer.proj_inverse * vec4(d.x, d.y, 1, 1);
     vec4 direction = matrices_uniform_buffer.view_inverse * vec4(normalize(target.xyz), 0);
-
     vec3 rayOrigin = origin.xyz;
     vec3 rayDir    = direction.xyz;
 
@@ -134,18 +124,36 @@ void main() {
     traceRayEXT(tlas, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0, rayOrigin, 0.001, rayDir, 10000.0, 0);
 
     if (prd.dist < 0.0) {
+        // WRITE G-BUFFER FOR SKY
+        imageStore(depth_image, pixel_coord, vec4(100000.0, 0.0, 0.0, 0.0));
+        imageStore(normal_image, pixel_coord, vec4(0.0));
+        imageStore(diffuse_image, pixel_coord, vec4(0.0));
+        imageStore(motion_vector_image, pixel_coord, vec4(0.0));
+
         write_current_reservoir(pixel_coord, Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, uint[2](0,0)));
         return;
     }
 
     vec3 hitPos = rayOrigin + rayDir * prd.dist;
-
     vec3 hit_normal = unpack_normal(prd.normal_packed);
     vec3 hit_albedo = unpackUnorm4x8(prd.albedo_packed).rgb;
     vec2 mat_info = unpackHalf2x16(prd.material_info);
     float roughness = max(mat_info.x, 0.01);
     float metallic = clamp(mat_info.y, 0.0, 1.0);
     vec3 V_view = -rayDir;
+
+    // --- NEW: Calculate Motion Vectors and Write G-Buffer early! ---
+    vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(hitPos, 1.0);
+    vec2 prev_ndc = prev_clip.xy / prev_clip.w;
+    vec2 prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
+    vec2 motion_vector = inUV - prev_uv;
+
+    vec3 denoiser_albedo = mix(hit_albedo, vec3(1.0), metallic);
+
+    imageStore(depth_image, pixel_coord, vec4(prd.dist, 0.0, 0.0, 0.0));
+    imageStore(normal_image, pixel_coord, vec4(hit_normal, roughness));
+    imageStore(diffuse_image, pixel_coord, vec4(denoiser_albedo, 0.0));
+    imageStore(motion_vector_image, pixel_coord, vec4(motion_vector, 0.0, 0.0));
 
     // Phase 2: RIS Initial Audition
     Reservoir current_r = Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, uint[2](0,0));
@@ -169,7 +177,6 @@ void main() {
             float p_hat = max(f_y.r, max(f_y.g, f_y.b));
             float cand_area = cand_light.v0_area.w;
             float p_y = 1.0 / max(float(num_lights) * cand_area, 0.0001);
-
             update_reservoir(current_r, cand_idx, cand_pos, cand_normal, p_hat / p_y, rnd());
         }
 
@@ -181,19 +188,15 @@ void main() {
         }
 
         // Phase 3: Temporal Reuse
-
-
         if (frame_count > 0) {
-            vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(hitPos, 1.0);
-            vec2 prev_ndc = prev_clip.xy / prev_clip.w;
-            vec2 prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
+            // Note: We are reusing the 'prev_uv' calculation we already did above!
             ivec2 prev_coord = ivec2(prev_uv * vec2(gl_LaunchSizeEXT.xy));
 
             if (prev_coord.x >= 0 && prev_coord.y >= 0 && prev_coord.x < gl_LaunchSizeEXT.x && prev_coord.y < gl_LaunchSizeEXT.y) {
                 Reservoir history_r = read_history_reservoir(prev_coord);
 
                 // Limit temporal history to maintain reactivity
-                history_r.M = min(history_r.M, 25.0);
+                history_r.M = min(history_r.M, 10.0);
 
                 if (history_r.W > 0.0) {
                     history_r.light_idx = min(history_r.light_idx, num_lights - 1);
@@ -210,10 +213,7 @@ void main() {
                 }
             }
         }
-
-
     }
-
 
     write_current_reservoir(pixel_coord, current_r);
 }

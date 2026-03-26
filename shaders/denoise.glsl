@@ -45,8 +45,8 @@ void main() {
     }
 
 
-    imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
-    return;
+    //imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
+    //return;
 
     float center_weight = kernel[2] * kernel[2];
     vec3 sum_color = center_color * center_weight;

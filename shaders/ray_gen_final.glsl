@@ -63,7 +63,6 @@ vec3 get_ggx_microfacet(vec3 normal, float roughness, float r1, float r2) {
     vec3 up = abs(normal.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
     vec3 tangent = normalize(cross(up, normal));
     vec3 bitangent = cross(normal, tangent);
-
     return tangent * h.x + bitangent * h.y + normal * h.z;
 }
 
@@ -77,6 +76,17 @@ Reservoir read_current_reservoir(ivec2 coord) {
     else return reservoirs_B[idx];
 }
 
+void merge_reservoirs(inout Reservoir r, Reservoir new_r, float p_hat_new, float random_val) {
+    r.M += new_r.M;
+    float weight = p_hat_new * new_r.W * new_r.M;
+    r.w_sum += weight;
+    if (random_val < (weight / max(r.w_sum, 0.0001))) {
+        r.light_idx = new_r.light_idx;
+        r.light_pos = new_r.light_pos;
+        r.light_normal = new_r.light_normal;
+    }
+}
+
 vec3 eval_unshadowed_light(
 vec3 hit_pos, vec3 hit_normal, vec3 V_view, vec3 hit_albedo, float roughness, float metallic,
 emissive_triangle_t light, vec3 light_pos, vec3 light_normal
@@ -87,14 +97,12 @@ emissive_triangle_t light, vec3 light_pos, vec3 light_normal
 
     float NdotL = max(dot(hit_normal, L), 0.0);
     float cos_light = max(dot(light_normal, -L), 0.0);
-
     if (NdotL <= 0.0 || cos_light <= 0.0) return vec3(0.0);
 
     vec3 H = normalize(V_view + L);
     float NdotH = max(dot(hit_normal, H), 0.0);
     float VdotH = max(dot(V_view, H), 0.0);
     float NdotV = max(dot(hit_normal, V_view), 0.001);
-
     float a = roughness * roughness;
     float a2 = a * a;
     float denom = (NdotH * NdotH * (a2 - 1.0) + 1.0);
@@ -103,7 +111,6 @@ emissive_triangle_t light, vec3 light_pos, vec3 light_normal
     vec3 F0 = mix(vec3(0.04), hit_albedo, metallic);
     vec3 F = F0 + (1.0 - F0) * pow(1.0 - VdotH, 5.0);
     vec3 specular_brdf = (D * F) / max(4.0 * NdotV * NdotL, 0.001);
-
     vec3 diffuse_brdf = hit_albedo * (1.0 - metallic) / 3.14159;
     float geometry = (NdotL * cos_light) / max(dist * dist, 0.0001);
 
@@ -113,14 +120,13 @@ emissive_triangle_t light, vec3 light_pos, vec3 light_normal
 void main() {
     vec3 total_radiance = vec3(0.0);
     int SAMPLES = 1;
-    int BOUNCES = 10;
+    int BOUNCES = 20;
     int SHADOW_BOUNCES = BOUNCES / 2;
 
     init_rng(gl_LaunchIDEXT.xy, frame_count);
     ivec2 pixel_coord = ivec2(gl_LaunchIDEXT.xy);
 
     vec3 primary_albedo = vec3(1.0);
-
     ivec2 tex_size = textureSize(blue_noise_tex, 0);
     ivec2 pan_offset = ivec2(frame_count * 1619, frame_count * 3137);
     ivec2 noise_coord = ivec2(gl_LaunchIDEXT.xy + pan_offset) % tex_size;
@@ -130,19 +136,14 @@ void main() {
         const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
         const vec2 inUV = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
         vec2 d = inUV * 2.0 - 1.0;
-
         vec4 origin    = matrices_uniform_buffer.view_inverse * vec4(0, 0, 0, 1);
         vec4 target    = matrices_uniform_buffer.proj_inverse * vec4(d.x, d.y, 1, 1);
         vec4 direction = matrices_uniform_buffer.view_inverse * vec4(normalize(target.xyz), 0);
-
         vec3 rayOrigin = origin.xyz;
         vec3 rayDir    = direction.xyz;
 
         vec3 throughput = vec3(1.0);
         vec3 radiance   = vec3(0.0);
-
-        float virtual_dist = 0.0;
-        bool gbuffer_written = false;
         bool in_glass = false;
 
         for (int bounce = 0; bounce < BOUNCES; bounce++) {
@@ -152,15 +153,9 @@ void main() {
             }
 
             traceRayEXT(tlas, ray_flags, 0xFF, 0, 0, 0, rayOrigin, 0.001, rayDir, 10000.0, 0);
-
             bool is_sky = (prd.dist < 0.0);
 
             if (is_sky) {
-                if (bounce == 0) {
-                    imageStore(depth_image, ivec2(gl_LaunchIDEXT.xy), vec4(100000.0, 0.0, 0.0, 0.0));
-                    imageStore(normal_image, ivec2(gl_LaunchIDEXT.xy), vec4(0.0));
-                    imageStore(motion_vector_image, ivec2(gl_LaunchIDEXT.xy), vec4(0.0));
-                }
                 radiance += vec3(0.0, 0.0, 0.0) * throughput;
                 break;
             }
@@ -175,42 +170,9 @@ void main() {
             float metallic = clamp(mat_info.y, 0.0, 1.0);
 
             vec3 denoiser_albedo = mix(hit_albedo, vec3(1.0), metallic);
-
             vec2 trans_ior = unpackHalf2x16(prd.transmission_ior_packed);
             float transmission = trans_ior.x;
             float ior = max(trans_ior.y, 1.0);
-
-            virtual_dist += prd.dist;
-
-            if (bounce == 0) {
-                imageStore(depth_image, ivec2(gl_LaunchIDEXT.xy), vec4(prd.dist, 0.0, 0.0, 0.0));
-                imageStore(normal_image, ivec2(gl_LaunchIDEXT.xy), vec4(hit_normal, roughness));
-                imageStore(diffuse_image, ivec2(gl_LaunchIDEXT.xy), vec4(denoiser_albedo, 0.0));
-
-                vec3 world_pos = rayOrigin + rayDir * prd.dist;
-                vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(world_pos, 1.0);
-                vec2 prev_ndc = prev_clip.xy / prev_clip.w;
-                vec2 prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
-
-                imageStore(motion_vector_image, ivec2(gl_LaunchIDEXT.xy), vec4(inUV - prev_uv, 0.0, 0.0));
-            }
-
-            if (!gbuffer_written) {
-                if (roughness > 0.1 || bounce == BOUNCES - 1) {
-                    primary_albedo = denoiser_albedo;
-                    imageStore(depth_image, ivec2(gl_LaunchIDEXT.xy), vec4(virtual_dist, 0.0, 0.0, 0.0));
-                    imageStore(normal_image, ivec2(gl_LaunchIDEXT.xy), vec4(hit_normal, roughness));
-                    imageStore(diffuse_image, ivec2(gl_LaunchIDEXT.xy), vec4(denoiser_albedo, 0.0));
-
-                    vec3 virtual_pos = origin.xyz + direction.xyz * virtual_dist;
-                    vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(virtual_pos, 1.0);
-                    vec2 prev_ndc = prev_clip.xy / prev_clip.w;
-                    vec2 prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
-
-                    imageStore(motion_vector_image, ivec2(gl_LaunchIDEXT.xy), vec4(inUV - prev_uv, 0.0, 0.0));
-                    gbuffer_written = true;
-                }
-            }
 
             radiance += prd.emission * throughput;
             float brightness = max(prd.emission.r, max(prd.emission.g, prd.emission.b));
@@ -222,12 +184,10 @@ void main() {
                 bool is_inside = dot(rayDir, hit_normal) > 0.0;
                 vec3 N = is_inside ? -hit_normal : hit_normal;
                 float eta = is_inside ? (ior / 1.0) : (1.0 / ior);
-
                 float cos_theta = min(dot(-rayDir, N), 1.0);
                 float R0 = (1.0 - eta) / (1.0 + eta);
                 R0 = R0 * R0;
                 float fresnel = R0 + (1.0 - R0) * pow(1.0 - cos_theta, 5.0);
-
                 vec3 refracted = refract(rayDir, N, eta);
 
                 if (length(refracted) < 0.01) {
@@ -255,17 +215,59 @@ void main() {
             uint num_lights = emissive_triangles.length();
             if (num_lights > 0 && bounce < SHADOW_BOUNCES) {
                 if (bounce == 0) {
-                    // ReSTIR DI for Primary Bounce
-                    Reservoir r = read_current_reservoir(pixel_coord);
+                    // --- SPATIAL REUSE ---
+                    Reservoir center_r = read_current_reservoir(pixel_coord);
+                    Reservoir spatial_r = Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, uint[2](0,0));
 
-                    if (r.W > 0.0) {
-                        r.light_idx = min(r.light_idx, num_lights - 1);
+                    // 1. Evaluate our own pixel's temporal candidate first
+                    if (center_r.W > 0.0) {
+                        center_r.light_idx = min(center_r.light_idx, num_lights - 1);
+                        emissive_triangle_t center_light = emissive_triangles[center_r.light_idx];
+                        vec3 f_y_center = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, center_light, center_r.light_pos, center_r.light_normal);
+                        float p_hat_center = max(f_y_center.r, max(f_y_center.g, f_y_center.b));
+                        merge_reservoirs(spatial_r, center_r, p_hat_center, rnd());
+                    }
 
-                        emissive_triangle_t winner = emissive_triangles[r.light_idx];
-                        vec3 f_y_winner = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, winner, r.light_pos, r.light_normal);
+                    // 2. Sample 5 neighbors within a 30 pixel radius
+                    int SPATIAL_SAMPLES = 5;
+                    float SPATIAL_RADIUS = 30.0;
 
-                        vec3 shadow_dir = r.light_pos - hitPos;
-                        float shadow_dist = length(shadow_dir);
+                    for (int s = 0; s < SPATIAL_SAMPLES; s++) {
+                        float angle = rnd() * 2.0 * 3.14159;
+                        float radius = sqrt(rnd()) * SPATIAL_RADIUS;
+                        ivec2 neighbor_coord = pixel_coord + ivec2(cos(angle) * radius, sin(angle) * radius);
+
+                        // Screen bounds check
+                        if (neighbor_coord.x < 0 || neighbor_coord.y < 0 || neighbor_coord.x >= gl_LaunchSizeEXT.x || neighbor_coord.y >= gl_LaunchSizeEXT.y) continue;
+
+                        // Geometry check (prevent grabbing light from a different surface)
+                        vec3 neighbor_normal = imageLoad(normal_image, neighbor_coord).xyz;
+                        float neighbor_depth = imageLoad(depth_image, neighbor_coord).x;
+
+                        if (dot(hit_normal, neighbor_normal) < 0.9) continue;
+                        if (abs(prd.dist - neighbor_depth) > 0.1 * prd.dist) continue;
+
+                        Reservoir neighbor_r = read_current_reservoir(neighbor_coord);
+                        if (neighbor_r.W > 0.0) {
+                            neighbor_r.light_idx = min(neighbor_r.light_idx, num_lights - 1);
+                            emissive_triangle_t neighbor_light = emissive_triangles[neighbor_r.light_idx];
+                            vec3 f_y_neighbor = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, neighbor_light, neighbor_r.light_pos, neighbor_r.light_normal);
+                            float p_hat_neighbor = max(f_y_neighbor.r, max(f_y_neighbor.g, f_y_neighbor.b));
+
+                            merge_reservoirs(spatial_r, neighbor_r, p_hat_neighbor, rnd());
+                        }
+                    }
+
+                    // 3. Finalize Spatial Winner and Shoot Shadow Ray
+                    if (spatial_r.w_sum > 0.0) {
+                        emissive_triangle_t winner = emissive_triangles[spatial_r.light_idx];
+                        vec3 f_y_winner = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, winner, spatial_r.light_pos, spatial_r.light_normal);
+                        float p_hat_winner = max(f_y_winner.r, max(f_y_winner.g, f_y_winner.b));
+
+                        spatial_r.W = spatial_r.w_sum / max(spatial_r.M * p_hat_winner, 0.0001);
+
+                        vec3 shadow_dir = spatial_r.light_pos - hitPos;
+                        float shadow_dist = max(length(shadow_dir), 0.0001);
                         shadow_dir /= shadow_dist;
 
                         if (dot(hit_normal, shadow_dir) > 0.0) {
@@ -274,7 +276,7 @@ void main() {
                             traceRayEXT(tlas, shadow_ray_flags, 0xFF, 0, 0, 0, hitPos, 0.001, shadow_dir, shadow_dist - 0.001, 0);
 
                             if (prd.dist < 0.0) {
-                                radiance += f_y_winner * throughput * r.W;
+                                radiance += f_y_winner * throughput * spatial_r.W;
                             }
                         }
                     }
@@ -289,7 +291,6 @@ void main() {
                     float u = 1.0 - sqr1;
                     float v = r2_nee * sqr1;
                     float w = 1.0 - u - v;
-
                     vec3 light_pos = light.v0_area.xyz * u + light.v1.xyz * v + light.v2.xyz * w;
                     vec3 light_normal = normalize(cross(light.v1.xyz - light.v0_area.xyz, light.v2.xyz - light.v0_area.xyz));
 
@@ -299,13 +300,12 @@ void main() {
 
                     float cos_theta_light = max(dot(light_normal, -shadow_ray_dir), 0.0);
                     float cos_theta_surface = max(dot(hit_normal, shadow_ray_dir), 0.0);
-
                     if (cos_theta_light > 0.0 && cos_theta_surface > 0.0) {
-                        uint shadow_ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT;
+                        uint shadow_ray_flags = gl_RayFlagsTerminateOnFirstHitEXT |
+                        gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT;
                         prd.dist = 1.0;
 
                         traceRayEXT(tlas, shadow_ray_flags, 0xFF, 0, 0, 0, hitPos, 0.001, shadow_ray_dir, light_dist - 0.001, 0);
-
                         if (prd.dist < 0.0) {
                             float light_area = light.v0_area.w;
                             float solid_angle_pdf = (light_dist * light_dist) / (cos_theta_light * light_area * float(num_lights));
@@ -319,7 +319,6 @@ void main() {
             vec3 F0 = mix(vec3(0.04), hit_albedo, metallic);
             float cos_theta = max(dot(N, V_view), 0.0);
             vec3 F = F0 + (1.0 - F0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
-
             float p_specular = clamp(max(F.r, max(F.g, F.b)), 0.05, 1.0);
 
             float r1, r2;
@@ -359,7 +358,6 @@ void main() {
 
         total_radiance += radiance;
         total_radiance = min(total_radiance, 10.0);
-
     }
 
     vec3 current_frame_color = total_radiance / float(SAMPLES);
