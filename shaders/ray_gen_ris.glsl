@@ -5,7 +5,6 @@
 #include <shaders/common.glsl>
 #include <shaders/utils.glsl>
 
-// Match layout bindings from your descriptor set
 layout(set = 0, binding = 1, r11f_g11f_b10f) uniform image2D raw_color_image;
 layout(set = 0, binding = 5, r16f) uniform image2D depth_image;
 layout(set = 0, binding = 6, rgba8_snorm) uniform image2D normal_image;
