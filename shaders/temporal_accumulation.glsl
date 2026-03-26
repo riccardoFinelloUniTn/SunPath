@@ -11,7 +11,7 @@ layout(set = 0, binding = 1, rg16f)   uniform readonly image2D motion_vector_ima
 layout(set = 0, binding = 2, r11f_g11f_b10f) uniform image2D accumulation_images[2];
 layout(set = 0, binding = 3)          uniform sampler2D history_samplers[2];
 
-const float ACCUMULATION_FACTOR = 0.06;
+const float ACCUMULATION_FACTOR = 0.1;
 const float COLOR_THRESHOLD = 0.1;
 
 vec3 get_historical_color(uint history_idx, vec2 uv, vec3 current_color) {
@@ -70,6 +70,8 @@ void main() {
         }
     }
     vec2 motion_vector = imageLoad(motion_vector_image, pixel_coords).rg;
+
+
     vec2 prev_uv = uv - motion_vector;
 
     uint history_idx = pc.frame_count % 2;
@@ -90,8 +92,8 @@ void main() {
         accumulated_color = mix(clamped_history, current_color, ACCUMULATION_FACTOR);
     }
 
-    //imageStore(accumulation_images[accum_idx], pixel_coords, vec4(motion_vector * 1000000.0, 1.0, 1.0));
-
+    //imageStore(accumulation_images[accum_idx], pixel_coords, vec4(motion_vector * 100000.0, 0.0, 1.0));
+    //return;
     imageStore(accumulation_images[accum_idx], pixel_coords, vec4(accumulated_color, 1.0));
     //imageStore(accumulation_images[accum_idx], pixel_coords, vec4(mix(motion_vector.r, accumulated_color.r, 0.5),mix(motion_vector.g, accumulated_color.g, 0.5),accumulated_color.b, 1.0));
 

@@ -130,7 +130,6 @@ void main() {
         const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
         const vec2 inUV = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
         vec2 d = inUV * 2.0 - 1.0;
-        d.y = -d.y;
 
         vec4 origin    = matrices_uniform_buffer.view_inverse * vec4(0, 0, 0, 1);
         vec4 target    = matrices_uniform_buffer.proj_inverse * vec4(d.x, d.y, 1, 1);
@@ -209,7 +208,7 @@ void main() {
                     vec3 virtual_pos = origin.xyz + direction.xyz * virtual_dist;
                     vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(virtual_pos, 1.0);
                     vec2 prev_ndc = prev_clip.xy / prev_clip.w;
-                    vec2 prev_uv = vec2(prev_ndc.x, -prev_ndc.y) * 0.5 + 0.5;
+                    vec2 prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
 
                     imageStore(motion_vector_image, ivec2(gl_LaunchIDEXT.xy), vec4(inUV - prev_uv, 0.0, 0.0));
                     gbuffer_written = true;
