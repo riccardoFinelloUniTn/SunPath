@@ -139,10 +139,7 @@ void main() {
     }
 
     vec3 hitPos = rayOrigin + rayDir * prd.dist;
-    uint hx = hash(floatBitsToUint(hitPos.x));
-    uint hy = hash(floatBitsToUint(hitPos.y));
-    uint hz = hash(floatBitsToUint(hitPos.z));
-    seed = hash(hx ^ hy ^ hz ^ frame_count);
+
     vec3 hit_normal = unpack_normal(prd.normal_packed);
     vec3 hit_albedo = unpackUnorm4x8(prd.albedo_packed).rgb;
     vec2 mat_info = unpackHalf2x16(prd.material_info);
@@ -196,7 +193,7 @@ void main() {
                 Reservoir history_r = read_history_reservoir(prev_coord);
 
                 // Limit temporal history to maintain reactivity
-                history_r.M = min(history_r.M, 20.0);
+                history_r.M = min(history_r.M, 25.0);
 
                 if (history_r.W > 0.0) {
                     history_r.light_idx = min(history_r.light_idx, num_lights - 1);

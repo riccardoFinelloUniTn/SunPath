@@ -168,9 +168,6 @@ void main() {
             vec3 hit_normal = unpack_normal(prd.normal_packed);
             vec3 hit_albedo = unpackUnorm4x8(prd.albedo_packed).rgb;
             vec3 hitPos = rayOrigin + rayDir * prd.dist;
-            if (bounce == 0) {
-                seed = floatBitsToUint(hitPos.x) ^ floatBitsToUint(hitPos.y) ^ floatBitsToUint(hitPos.z) ^ frame_count;
-            }
             vec3 V_view = -rayDir;
 
             vec2 mat_info = unpackHalf2x16(prd.material_info);
