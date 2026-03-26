@@ -26,17 +26,22 @@ vec4 sample_texture(in uint texture_index, in vec2 tex_coords, in vec4 fallback_
 }
 
 // Octahedral Normal Packing (3D -> 2D -> uint)
+vec2 signNotZero(vec2 v) {
+    return vec2((v.x >= 0.0) ? 1.0 : -1.0, (v.y >= 0.0) ? 1.0 : -1.0);
+}
+
 uint pack_normal(vec3 n) {
     n /= (abs(n.x) + abs(n.y) + abs(n.z));
-    vec2 v = (n.z >= 0.0) ? n.xy : (1.0 - abs(n.yx)) * sign(n.xy);
-    return packSnorm2x16(v * 0.5 + 0.5);
+    vec2 p = (n.z >= 0.0) ? n.xy : (1.0 - abs(n.yx)) * signNotZero(n.xy);
+    return packSnorm2x16(p);
 }
 
 vec3 unpack_normal(uint p) {
-    vec2 v = unpackSnorm2x16(p) * 2.0 - 1.0;
-    vec3 n = vec3(v, 1.0 - abs(v.x) - abs(v.y));
+    vec2 v = unpackSnorm2x16(p);
+    vec3 n = vec3(v.x, v.y, 1.0 - abs(v.x) - abs(v.y));
     float t = max(-n.z, 0.0);
-    n.xy += mix(vec2(t), vec2(-t), greaterThanEqual(n.xy, vec2(0.0)));
+    n.x += (n.x >= 0.0) ? -t : t;
+    n.y += (n.y >= 0.0) ? -t : t;
     return normalize(n);
 }
 

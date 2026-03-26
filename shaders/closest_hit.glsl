@@ -53,9 +53,11 @@ void main() {
     vec3 final_normal = world_normal;
 
     // Only apply normal mapping if a tangent actually exists
+
+
     if (length(tangent.xyz) > 0.1) {
         // Transform Tangent to World Space
-        vec3 world_tangent = normalize(vec3(tangent.xyz * gl_WorldToObjectEXT));
+        vec3 world_tangent = normalize((gl_ObjectToWorldEXT * vec4(tangent.xyz, 0.0)).xyz);
 
         // Gram-Schmidt Orthogonalization
         world_tangent = normalize(world_tangent - dot(world_tangent, world_normal) * world_normal);
@@ -75,6 +77,7 @@ void main() {
         // Apply TBN matrix to get the final, perturbed world-space normal
         final_normal = normalize(TBN * sampled_normal);
     }
+
 
     // payload
     payload.dist = gl_HitTEXT;
