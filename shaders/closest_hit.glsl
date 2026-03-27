@@ -50,29 +50,24 @@ void main() {
     vec3 world_normal = normalize(vec3(normal * gl_WorldToObjectEXT));
     vec3 final_normal = world_normal;
 
-    // Only apply normal mapping if a tangent actually exists
-
-
     if (length(tangent.xyz) > 0.1) {
-        // Transform Tangent to World Space
-        vec3 world_tangent = normalize((gl_ObjectToWorldEXT * vec4(tangent.xyz, 0.0)).xyz);
+        float handedness = tangent.w >= 0.0 ? 1.0 : -1.0;
 
-        // Gram-Schmidt Orthogonalization
+        vec3 world_tangent = normalize((gl_ObjectToWorldEXT * vec4(tangent.xyz, 0.0)).xyz);
         world_tangent = normalize(world_tangent - dot(world_tangent, world_normal) * world_normal);
 
-        // Calculate Bitangent using the cross product and the tangent.w sign (handedness)
-        vec3 world_bitangent = cross(world_normal, world_tangent) * tangent.w;
-
-        // Construct the TBN Matrix
+        vec3 world_bitangent = cross(world_normal, world_tangent) * handedness;
         mat3 TBN = mat3(world_tangent, world_bitangent, world_normal);
 
-        // Sample the Normal Map (defaults to flat normal 0.5, 0.5, 1.0 if null)
         vec3 sampled_normal = sample_texture(material.normal_texture_index, uv, vec4(0.5, 0.5, 1.0, 1.0)).rgb;
 
         // Unpack from [0, 1] to [-1, 1]
         sampled_normal = sampled_normal * 2.0 - 1.0;
 
-        // Apply TBN matrix to get the final, perturbed world-space normal
+        sampled_normal.y = -sampled_normal.y;
+
+        sampled_normal.xy *= 1.8;
+
         final_normal = normalize(TBN * sampled_normal);
     }
 
