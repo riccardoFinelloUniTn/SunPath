@@ -17,7 +17,7 @@ use crate::vulkan_abstraction::{DenoiseDescriptorSetLayout, DenoisePass, PostPro
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
 
-pub const DENOISE_PASSES: u32 = 3;
+pub const DENOISE_PASSES: u32 = 4;
 
 pub const EXPOSURE: f32 = 1.0;
 

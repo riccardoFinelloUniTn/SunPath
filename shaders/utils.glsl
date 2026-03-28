@@ -1,22 +1,11 @@
 #ifndef SHADERS_UTILS_GLSL
 #define SHADERS_UTILS_GLSL
-// necessary since this file uses the texture_samplers uniform in sample_texture
+
 #include <shaders/common.glsl>
 
-uint hash(uint x) {
-    x ^= x >> 16;
-    x *= 0x7feb352du;
-    x ^= x >> 15;
-    x *= 0x846ca68bu;
-    x ^= x >> 16;
-    return x;
-}
-
-// a texture index of ~0 == u32(-1) == 0xffffffff may be passed to indicate that no texture should be used, and the provided value should be used as replacement for all texels
+// --- TEXTURE & COLOR UTILS ---
 const uint null_texture = ~0;
 
-// sample from the provided texture index or, if it is null, return the fallback color
-// texture_samplers is not currently passed as a
 vec4 sample_texture(in uint texture_index, in vec2 tex_coords, in vec4 fallback_color) {
     if(texture_index == null_texture) {
         return fallback_color;
@@ -25,7 +14,11 @@ vec4 sample_texture(in uint texture_index, in vec2 tex_coords, in vec4 fallback_
     }
 }
 
-// Octahedral Normal Packing (3D -> 2D -> uint)
+float remove_srgb_curve(float x) {
+    return x < 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4);
+}
+
+// --- NORMAL PACKING ---
 vec2 signNotZero(vec2 v) {
     return vec2((v.x >= 0.0) ? 1.0 : -1.0, (v.y >= 0.0) ? 1.0 : -1.0);
 }
@@ -45,7 +38,7 @@ vec3 unpack_normal(uint p) {
     return normalize(n);
 }
 
-//given 3 vertices, a texture coordinate attribute and barycentric coordinates interpolate the texture coordinate attribute
+// --- INTERPOLATION ---
 #define INTERPOLATE_VERTEX_ATTRIBUTE(attribute, triangle, barycentrics) \
           triangle[0].attribute * barycentrics.x \
         + triangle[1].attribute * barycentrics.y \
@@ -61,19 +54,32 @@ vertex_attributes_t interpolate_vertex_attributes(in vertex_attributes_t triangl
     ret.normal_tex_coord = INTERPOLATE_VERTEX_ATTRIBUTE(normal_tex_coord, triangle, barycentrics);
     ret.occlusion_tex_coord = INTERPOLATE_VERTEX_ATTRIBUTE(occlusion_tex_coord, triangle, barycentrics);
     ret.emissive_tex_coord = INTERPOLATE_VERTEX_ATTRIBUTE(emissive_tex_coord, triangle, barycentrics);
-
     return ret;
 }
-
 #undef INTERPOLATE_VERTEX_ATTRIBUTE
 
-// take a value that should be interpreted as linear and return the equivalent that should be interpreted as sRGB.
-// this is useful to write to an sRGB image from a compute or raytracing shader.
-// source: https://github.com/Microsoft/DirectX-Graphics-Samples/blob/master/MiniEngine/Core/Shaders/ColorSpaceUtility.hlsli
-// note: if this is ever a bottleneck (shouldn't be) consider using the fast version, from the same source
-float remove_srgb_curve(float x) {
-    // Approximately pow(x, 2.2)
-    return x < 0.04045 ?  x / 12.92 : pow((x + 0.055) / 1.055, 2.4);
+// --- RNG STATE & FUNCTIONS ---
+uint hash(uint x) {
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+uint seed;
+
+float rnd() {
+    seed = seed * 747796405u + 2891336453u;
+    uint word = ((seed >> ((seed >> 28u) + 4u)) ^ seed) * 277803737u;
+    uint result = (word >> 22u) ^ word;
+    return float(result) / 4294967295.0;
+}
+
+void init_rng(vec2 pixel, uint frame, vec2 launch_size) {
+    uint pixel_idx = uint(pixel.y) * uint(launch_size.x) + uint(pixel.x);
+    seed = hash(pixel_idx ^ hash(frame));
 }
 
 #endif
