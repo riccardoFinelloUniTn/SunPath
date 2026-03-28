@@ -30,9 +30,11 @@ void main() {
     ivec2 pixel_coord = ivec2(gl_LaunchIDEXT.xy);
 
     ivec2 tex_size = textureSize(blue_noise_tex, 0);
-    ivec2 pan_offset = ivec2(frame_count * 1619, frame_count * 3137);
-    ivec2 noise_coord = ivec2(gl_LaunchIDEXT.xy + pan_offset) % tex_size;
-    vec4 blue_noise = texelFetch(blue_noise_tex, noise_coord, 0);
+    ivec2 noise_coord_1 = ivec2(gl_LaunchIDEXT.xy) % tex_size;
+    ivec2 noise_coord_2 = (ivec2(gl_LaunchIDEXT.xy) + ivec2(47, 71)) % tex_size;
+
+    float bn_1 = texelFetch(blue_noise_tex, noise_coord_1, 0).r;
+    float bn_2 = texelFetch(blue_noise_tex, noise_coord_2, 0).r;
 
     for(int i = 0; i < SAMPLES; i++){
         const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
@@ -224,10 +226,10 @@ void main() {
 
             float r1, r2;
             if (bounce == 0) {
-                // R2 Low-Discrepancy sequence decoupling to stop spiral artifacts
-                r1 = fract(blue_noise.r + float(frame_count % 1024) * 0.75487766);
-                r2 = fract(blue_noise.g + float(frame_count % 1024) * 0.56984029);
+                r1 = fract(bn_1 + float(frame_count % 1024) * 0.75487766);
+                r2 = fract(bn_2 + float(frame_count % 1024) * 0.56984029);
             } else {
+                // Pure PCG white noise for indirect bounces
                 r1 = rnd();
                 r2 = rnd();
             }
