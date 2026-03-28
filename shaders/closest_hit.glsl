@@ -68,7 +68,7 @@ void main() {
 
         sampled_normal.xy *= 1.8;
 
-        final_normal = normalize(TBN * sampled_normal);
+        //final_normal = normalize(TBN * sampled_normal);
     }
 
 

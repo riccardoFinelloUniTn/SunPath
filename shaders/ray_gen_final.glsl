@@ -146,6 +146,8 @@ void main() {
         vec3 radiance   = vec3(0.0);
         bool in_glass = false;
 
+        bool restir_evaluated = false;
+
         float primary_hit_dist = 0.0;
         bool use_virtual_gbuffer = false;
 
@@ -248,8 +250,11 @@ void main() {
 
             uint num_lights = emissive_triangles.length();
             if (num_lights > 0 && bounce < SHADOW_BOUNCES) {
-                if (bounce == 0) {
-                    // --- SPATIAL REUSE ---
+
+                // --- SPATIAL REUSE (Runs on the FIRST rough surface) ---
+                if (!restir_evaluated && roughness > 0.2) {
+                    restir_evaluated = true; // Mark it so subsequent bounces use NEE
+
                     Reservoir center_r = read_current_reservoir(pixel_coord);
                     Reservoir spatial_r = Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, uint[2](0,0));
 
@@ -297,7 +302,6 @@ void main() {
                         emissive_triangle_t winner = emissive_triangles[spatial_r.light_idx];
                         vec3 f_y_winner = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, winner, spatial_r.light_pos, spatial_r.light_normal);
                         float p_hat_winner = max(f_y_winner.r, max(f_y_winner.g, f_y_winner.b));
-
                         spatial_r.W = spatial_r.w_sum / max(spatial_r.M * p_hat_winner, 0.0001);
 
                         vec3 shadow_dir = spatial_r.light_pos - hitPos;
@@ -314,8 +318,11 @@ void main() {
                             }
                         }
                     }
-                } else if (roughness > 0.2) {
-                    // Standard NEE for Indirect Bounces
+                }
+
+                // --- STANDARD NEE (Runs on all subsequent rough bounces) ---
+                else if (restir_evaluated && roughness > 0.2) {
+
                     uint light_idx = min(uint(rnd() * num_lights), num_lights - 1);
                     emissive_triangle_t light = emissive_triangles[light_idx];
 
@@ -325,6 +332,7 @@ void main() {
                     float u = 1.0 - sqr1;
                     float v = r2_nee * sqr1;
                     float w = 1.0 - u - v;
+
                     vec3 light_pos = light.v0_area.xyz * u + light.v1.xyz * v + light.v2.xyz * w;
                     vec3 light_normal = normalize(cross(light.v1.xyz - light.v0_area.xyz, light.v2.xyz - light.v0_area.xyz));
 
@@ -334,12 +342,13 @@ void main() {
 
                     float cos_theta_light = max(dot(light_normal, -shadow_ray_dir), 0.0);
                     float cos_theta_surface = max(dot(hit_normal, shadow_ray_dir), 0.0);
+
                     if (cos_theta_light > 0.0 && cos_theta_surface > 0.0) {
-                        uint shadow_ray_flags = gl_RayFlagsTerminateOnFirstHitEXT |
-                        gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT;
+                        uint shadow_ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT;
                         prd.dist = 1.0;
 
                         traceRayEXT(tlas, shadow_ray_flags, 0xFF, 0, 0, 0, hitPos, 0.001, shadow_ray_dir, light_dist - 0.001, 0);
+
                         if (prd.dist < 0.0) {
                             float light_area = light.v0_area.w;
                             float solid_angle_pdf = (light_dist * light_dist) / (cos_theta_light * light_area * float(num_lights));

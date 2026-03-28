@@ -121,45 +121,79 @@ void main() {
     vec3 rayDir    = direction.xyz;
 
     // Phase 1: Shoot primary ray to find surface
-    traceRayEXT(tlas, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0, rayOrigin, 0.001, rayDir, 10000.0, 0);
+    vec3 hitPos;
+    vec3 hit_normal;
+    vec3 hit_albedo;
+    float roughness;
+    float metallic;
+    vec3 V_view;
+    vec2 prev_uv; // <-- HOISTED HERE
 
-    if (prd.dist < 0.0) {
-        // WRITE G-BUFFER FOR SKY
+    bool found_diffuse_surface = false;
+    float virtual_distance = 0.0;
+
+    for (int virtual_bounce = 0; virtual_bounce < 20; virtual_bounce++) {
+        traceRayEXT(tlas, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0, rayOrigin, 0.001, rayDir, 10000.0, 0);
+
+        if (prd.dist < 0.0) {
+            break; // Hit the sky, break out.
+        }
+
+        // Update physical hit variables
+        hitPos = rayOrigin + rayDir * prd.dist;
+        hit_normal = unpack_normal(prd.normal_packed);
+        hit_albedo = unpackUnorm4x8(prd.albedo_packed).rgb;
+
+        vec2 mat_info = unpackHalf2x16(prd.material_info);
+        roughness = max(mat_info.x, 0.01);
+        metallic = clamp(mat_info.y, 0.0, 1.0);
+
+        vec2 trans_ior = unpackHalf2x16(prd.transmission_ior_packed);
+        float transmission = trans_ior.x;
+
+        V_view = -rayDir;
+        virtual_distance += prd.dist;
+
+        // Check for mirrors/glass
+        if ((metallic > 0.9 && roughness < 0.1) || transmission > 0.5) {
+            rayOrigin = hitPos + hit_normal * 0.001;
+            rayDir = reflect(rayDir, hit_normal);
+        } else {
+            // We hit a diffuse object. Calculate Virtual G-Buffers and prev_uv!
+            vec3 virtual_world_pos = origin.xyz + direction.xyz * virtual_distance;
+            vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(virtual_world_pos, 1.0);
+            vec2 prev_ndc = prev_clip.xy / prev_clip.w;
+
+            // Assign to the hoisted variable so Temporal Reuse can read it later
+            prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
+
+            vec2 motion_vector = inUV - prev_uv;
+            vec3 denoiser_albedo = mix(hit_albedo, vec3(1.0), metallic);
+
+            imageStore(depth_image, pixel_coord, vec4(virtual_distance, 0.0, 0.0, 0.0));
+            imageStore(normal_image, pixel_coord, vec4(hit_normal, roughness));
+            imageStore(diffuse_image, pixel_coord, vec4(denoiser_albedo, 0.0));
+            imageStore(motion_vector_image, pixel_coord, vec4(motion_vector, 0.0, 0.0));
+
+            found_diffuse_surface = true;
+            break;
+        }
+    }
+
+    if (!found_diffuse_surface) {
         imageStore(depth_image, pixel_coord, vec4(100000.0, 0.0, 0.0, 0.0));
         imageStore(normal_image, pixel_coord, vec4(0.0));
         imageStore(diffuse_image, pixel_coord, vec4(0.0));
         imageStore(motion_vector_image, pixel_coord, vec4(0.0));
-
         write_current_reservoir(pixel_coord, Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, uint[2](0,0)));
         return;
     }
-
-    vec3 hitPos = rayOrigin + rayDir * prd.dist;
-    vec3 hit_normal = unpack_normal(prd.normal_packed);
-    vec3 hit_albedo = unpackUnorm4x8(prd.albedo_packed).rgb;
-    vec2 mat_info = unpackHalf2x16(prd.material_info);
-    float roughness = max(mat_info.x, 0.01);
-    float metallic = clamp(mat_info.y, 0.0, 1.0);
-    vec3 V_view = -rayDir;
-
-    vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(hitPos, 1.0);
-    vec2 prev_ndc = prev_clip.xy / prev_clip.w;
-    vec2 prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
-    vec2 motion_vector = inUV - prev_uv;
-
-    vec3 denoiser_albedo = mix(hit_albedo, vec3(1.0), metallic);
-
-    imageStore(depth_image, pixel_coord, vec4(prd.dist, 0.0, 0.0, 0.0));
-    imageStore(normal_image, pixel_coord, vec4(hit_normal, roughness));
-    imageStore(diffuse_image, pixel_coord, vec4(denoiser_albedo, 0.0));
-    imageStore(motion_vector_image, pixel_coord, vec4(motion_vector, 0.0, 0.0));
-
     //RIS Initial Audition
     Reservoir current_r = Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, uint[2](0,0));
     uint num_lights = emissive_triangles.length();
     int RIS_CANDIDATES = 8;
 
-    if (num_lights > 0) {
+    if (num_lights > 0 && roughness > 0.2) {
         for(int i = 0; i < RIS_CANDIDATES; i++) {
             uint cand_idx = min(uint(rnd() * num_lights), num_lights - 1);
             emissive_triangle_t cand_light = emissive_triangles[cand_idx];
