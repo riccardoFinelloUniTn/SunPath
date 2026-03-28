@@ -155,18 +155,42 @@ void main() {
         virtual_distance += prd.dist;
 
         // Check for mirrors/glass
-        if ((metallic > 0.9 && roughness < 0.1) || transmission > 0.5) {
+        if (transmission > 0.5) {
+            float ior = max(trans_ior.y, 1.0);
+            bool is_inside = dot(rayDir, hit_normal) > 0.0;
+            vec3 N = is_inside ? -hit_normal : hit_normal;
+            float eta = is_inside ? (ior / 1.0) : (1.0 / ior);
+
+            float cos_theta = min(dot(-rayDir, N), 1.0);
+            float R0 = (1.0 - eta) / (1.0 + eta);
+            R0 = R0 * R0;
+            float fresnel = R0 + (1.0 - R0) * pow(1.0 - cos_theta, 5.0);
+
+            vec3 refracted = refract(rayDir, N, eta);
+            if (length(refracted) < 0.01) fresnel = 1.0; // Total internal reflection
+
+            // Probabilistically choose reflection or refraction for the RIS audition
+            if (rnd() < fresnel) {
+                rayDir = reflect(rayDir, N);
+            } else {
+                rayDir = refracted;
+            }
+            rayOrigin = hitPos + rayDir * 0.001;
+
+        }
+        // Then check for pure mirrors
+        else if (metallic > 0.9 && roughness < 0.1) {
             rayOrigin = hitPos + hit_normal * 0.001;
             rayDir = reflect(rayDir, hit_normal);
-        } else {
-            // We hit a diffuse object. Calculate Virtual G-Buffers and prev_uv!
+
+        }
+        // Otherwise, it's a diffuse object
+        else {
             vec3 virtual_world_pos = origin.xyz + direction.xyz * virtual_distance;
             vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(virtual_world_pos, 1.0);
             vec2 prev_ndc = prev_clip.xy / prev_clip.w;
 
-            // Assign to the hoisted variable so Temporal Reuse can read it later
             prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
-
             vec2 motion_vector = inUV - prev_uv;
             vec3 denoiser_albedo = mix(hit_albedo, vec3(1.0), metallic);
 
