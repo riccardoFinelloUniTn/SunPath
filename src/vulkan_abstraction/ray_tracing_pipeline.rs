@@ -65,6 +65,11 @@ impl RayTracingPipeline {
             include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/ray_miss.spirv")),
         )?;
 
+        let any_hit_stage_create_info = make_shader_stage_create_info(
+            vk::ShaderStageFlags::ANY_HIT_KHR,
+            include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/any_hit.spirv")),
+        )?;
+
         let closest_hit_stage_create_info = make_shader_stage_create_info(
             vk::ShaderStageFlags::CLOSEST_HIT_KHR,
             include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/closest_hit.spirv")),
@@ -77,6 +82,8 @@ impl RayTracingPipeline {
         stages.push(ray_miss_stage_create_info);
         let closest_hit_stage_index = stages.len();
         stages.push(closest_hit_stage_create_info);
+        let any_hit_stage_index = stages.len();
+        stages.push(any_hit_stage_create_info);
 
         let mut shader_groups = Vec::new();
         assert_eq!(ray_gen_stage_index, 0);
@@ -104,7 +111,7 @@ impl RayTracingPipeline {
         let closest_hit_shader_group_create_info = vk::RayTracingShaderGroupCreateInfoKHR::default()
             .ty(vk::RayTracingShaderGroupTypeKHR::TRIANGLES_HIT_GROUP)
             .intersection_shader(vk::SHADER_UNUSED_KHR)
-            .any_hit_shader(vk::SHADER_UNUSED_KHR)
+            .any_hit_shader(any_hit_stage_index as u32)
             .closest_hit_shader(closest_hit_stage_index as u32)
             .general_shader(vk::SHADER_UNUSED_KHR);
 
@@ -112,7 +119,7 @@ impl RayTracingPipeline {
 
         let push_constants = [vk::PushConstantRange::default()
             .stage_flags(
-                vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::MISS_KHR,
+                vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::MISS_KHR| vk::ShaderStageFlags::ANY_HIT_KHR,
             )
             .offset(0)
             .size(std::mem::size_of::<RaytracingPushConstant>() as u32)];

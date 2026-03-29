@@ -54,11 +54,7 @@ void main() {
         bool restir_evaluated = false;
 
         for (int bounce = 0; bounce < BOUNCES; bounce++) {
-            uint ray_flags = gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT;
-            if (in_glass) {
-                ray_flags = gl_RayFlagsOpaqueEXT;
-            }
-
+            uint ray_flags = gl_RayFlagsNoneEXT;
             traceRayEXT(tlas, ray_flags, 0xFF, 0, 0, 0, rayOrigin, 0.001, rayDir, 10000.0, 0);
 
             if (prd.dist < 0.0) {
@@ -171,7 +167,7 @@ void main() {
                         shadow_dir /= shadow_dist;
 
                         if (dot(hit_normal, shadow_dir) > 0.0) {
-                            uint shadow_ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT;
+                            uint shadow_ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT;
                             prd.dist = 1.0;
                             traceRayEXT(tlas, shadow_ray_flags, 0xFF, 0, 0, 0, hitPos, 0.001, shadow_dir, shadow_dist - 0.001, 0);
 
@@ -204,7 +200,7 @@ void main() {
                     float cos_theta_surface = max(dot(hit_normal, shadow_ray_dir), 0.0);
 
                     if (cos_theta_light > 0.0 && cos_theta_surface > 0.0) {
-                        uint shadow_ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT;
+                        uint shadow_ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT;
                         prd.dist = 1.0;
                         traceRayEXT(tlas, shadow_ray_flags, 0xFF, 0, 0, 0, hitPos, 0.001, shadow_ray_dir, light_dist - 0.001, 0);
 

@@ -53,6 +53,12 @@ impl From<&vulkan_abstraction::gltf::Material> for Material {
                 None => Self::NULL_TEXTURE_INDEX,
             }
         };
+        let alpha_mode = match material.alpha_mode {
+            gltf::material::AlphaMode::Opaque => 0,
+            gltf::material::AlphaMode::Mask => 1,
+            gltf::material::AlphaMode::Blend => 2,
+        };
+
 
         Self {
             base_color_value: material.pbr_metallic_roughness_properties.base_color_factor,
@@ -75,8 +81,8 @@ impl From<&vulkan_abstraction::gltf::Material> for Material {
             ],
             emissive_texture_index: to_texture_index(material.emissive_texture_index),
 
-            alpha_mode: 0,
-            alpha_cutoff: 0.0,
+            alpha_mode,
+            alpha_cutoff: material.alpha_cutoff,
             transmission_factor: material.transmission_factor,
             ior: material.ior,
             _end_padding: [0;3],

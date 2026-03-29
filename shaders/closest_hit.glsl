@@ -89,6 +89,22 @@ void main() {
     payload.emission = final_emission;
     payload.albedo_packed = packUnorm4x8(vec4(out_albedo, 1.0)); // Uses our overridden albedo
     payload.normal_packed = pack_normal(final_normal);
-    payload.material_info = packHalf2x16(vec2(material.roughness_factor, material.metallic_factor));
+
+    float final_roughness = material.roughness_factor;
+    float final_metallic = material.metallic_factor;
+
+    // If the model has a metallic/roughness texture, sample it!
+    if (material.metallic_roughness_texture_index != null_texture) {
+        // Fallback to 1.0 so we don't zero out the factors if something goes wrong
+        vec4 mr_sample = sample_texture(material.metallic_roughness_texture_index, uv, vec4(1.0));
+
+        // glTF standard: Green is Roughness, Blue is Metallic.
+        // We multiply by the base factors according to the glTF specification.
+        final_roughness *= mr_sample.g;
+        final_metallic *= mr_sample.b;
+    }
+
+    // Pack the evaluated PBR values into the payload
+    payload.material_info = packHalf2x16(vec2(final_roughness, final_metallic));
     payload.transmission_ior_packed = packHalf2x16(vec2(material.transmission_factor, material.ior));
 }

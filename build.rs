@@ -77,6 +77,12 @@ fn main() {
         false,
         "closest_hit.spirv",
     );
+    compile_shader(
+        "shaders/any_hit.glsl",
+        shaderc::ShaderKind::AnyHit,
+        false,
+        "any_hit.spirv",
+    );
     compile_shader("shaders/ray_miss.glsl", shaderc::ShaderKind::Miss, false, "ray_miss.spirv");
     compile_shader("shaders/denoise.glsl", shaderc::ShaderKind::Compute, false, "denoise.spirv");
     compile_shader("shaders/temporal_accumulation.glsl", shaderc::ShaderKind::Compute, false, "temporal_accumulation.spirv");

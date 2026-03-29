@@ -17,7 +17,7 @@ use crate::vulkan_abstraction::{DenoiseDescriptorSetLayout, DenoisePass, PostPro
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
 
-pub const DENOISE_PASSES: u32 = 4;
+pub const DENOISE_PASSES: u32 = 8;
 
 pub const EXPOSURE: f32 = 1.0;
 
@@ -1106,7 +1106,7 @@ impl Renderer {
             device.cmd_push_constants(
                 cmd_buf,
                 self.ray_tracing_pipeline_ris.layout(),
-                vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::MISS_KHR,
+                vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::MISS_KHR| vk::ShaderStageFlags::ANY_HIT_KHR,
                 0,
                 &push_constant_bytes,
             );
@@ -1154,7 +1154,7 @@ impl Renderer {
             device.cmd_push_constants(
                 cmd_buf,
                 self.ray_tracing_pipeline_final.layout(),
-                vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::MISS_KHR,
+                vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::MISS_KHR| vk::ShaderStageFlags::ANY_HIT_KHR,
                 0,
                 &push_constant_bytes,
             );

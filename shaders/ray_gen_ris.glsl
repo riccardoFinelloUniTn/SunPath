@@ -54,7 +54,7 @@ void main() {
     float virtual_distance = 0.0;
 
     for (int virtual_bounce = 0; virtual_bounce < 20; virtual_bounce++) {
-        traceRayEXT(tlas, gl_RayFlagsOpaqueEXT, 0xFF, 0, 0, 0, rayOrigin, 0.001, rayDir, 10000.0, 0);
+        traceRayEXT(tlas, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, rayOrigin, 0.001, rayDir, 10000.0, 0);
 
         if (prd.dist < 0.0) {
             break; // Hit the sky
