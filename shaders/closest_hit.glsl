@@ -16,7 +16,7 @@ void main() {
     mesh_info_t mesh_info = meshes_info_uniform_buffer.m[blas_instance_id];
     material_t material   = mesh_info.material;
 
-    // 2. Interpolate Vertices
+    // 2. Get Vertices
     uint index_offset = gl_PrimitiveID * 3;
     uint indices[3] = {
     mesh_info.indices.i[index_offset+0],
@@ -28,55 +28,67 @@ void main() {
     vertex_attributes_t v1 = mesh_info.vertices.v[indices[1]];
     vertex_attributes_t v2 = mesh_info.vertices.v[indices[2]];
 
-    // Interpolate using barycentrics
-    vec3 pos     = v0.position * barycentrics.x + v1.position * barycentrics.y + v2.position * barycentrics.z;
-    vec3 normal  = v0.normal   * barycentrics.x + v1.normal   * barycentrics.y + v2.normal   * barycentrics.z;
-    vec4 tangent = v0.tangent  * barycentrics.x + v1.tangent  * barycentrics.y + v2.tangent  * barycentrics.z;
-    vec2 uv      = v0.base_color_tex_coord * barycentrics.x + v1.base_color_tex_coord * barycentrics.y + v2.base_color_tex_coord * barycentrics.z;
+    // 3. Interpolate Geometry
+    vec3 pos = v0.position * barycentrics.x + v1.position * barycentrics.y + v2.position * barycentrics.z;
+    vec3 normal = v0.normal * barycentrics.x + v1.normal * barycentrics.y + v2.normal * barycentrics.z;
 
-    // Texture sampling
+    // Only interpolate the XYZ direction of the tangent
+    vec3 tangent_dir = v0.tangent.xyz * barycentrics.x + v1.tangent.xyz * barycentrics.y + v2.tangent.xyz * barycentrics.z;
+
+    // Handedness must be taken strictly from the first vertex to prevent seam corruption
+    float handedness = v0.tangent.w >= 0.0 ? 1.0 : -1.0;
+
+    vec2 uv = v0.base_color_tex_coord * barycentrics.x + v1.base_color_tex_coord * barycentrics.y + v2.base_color_tex_coord * barycentrics.z;
+    vec2 normal_uv = v0.normal_tex_coord * barycentrics.x + v1.normal_tex_coord * barycentrics.y + v2.normal_tex_coord * barycentrics.z;
+
+    // 4. Texture sampling
     vec4 base_color = sample_texture(material.base_color_texture_index, uv, material.base_color_value);
     vec3 emissive_factor_rgb = material.emissive_factor.rgb;
     float emissive_strength  = material.emissive_factor.w;
 
-    vec4 emissive_sample = sample_texture(
-    material.emissive_texture_index,
-    uv,
-    vec4(emissive_factor_rgb, 1.0)
-    );
-
+    vec4 emissive_sample = sample_texture(material.emissive_texture_index, uv, vec4(emissive_factor_rgb, 1.0));
     vec3 final_emission = emissive_sample.rgb * emissive_strength;
 
-    vec3 world_normal = normalize(vec3(normal * gl_WorldToObjectEXT));
+    // 5. Transform geometric normal correctly (Normal * WorldToObject = proper Inverse Transpose)
+    vec3 world_normal = normalize(normal * mat3(gl_WorldToObjectEXT));
     vec3 final_normal = world_normal;
 
-    if (length(tangent.xyz) > 0.1) {
-        float handedness = tangent.w >= 0.0 ? 1.0 : -1.0;
+    // By default, our output albedo is just the base color
+    vec3 out_albedo = base_color.rgb;
 
-        vec3 world_tangent = normalize((gl_ObjectToWorldEXT * vec4(tangent.xyz, 0.0)).xyz);
+    // 6. Normal Mapping Application
+    if (length(tangent_dir) > 0.001) {
+        // Build perfect TBN matrix
+        vec3 world_tangent = normalize(mat3(gl_ObjectToWorldEXT) * tangent_dir);
         world_tangent = normalize(world_tangent - dot(world_tangent, world_normal) * world_normal);
-
         vec3 world_bitangent = cross(world_normal, world_tangent) * handedness;
         mat3 TBN = mat3(world_tangent, world_bitangent, world_normal);
 
-        vec3 sampled_normal = sample_texture(material.normal_texture_index, uv, vec4(0.5, 0.5, 1.0, 1.0)).rgb;
+        // CHECK: Does this object actually have a normal map assigned?
+        if (material.normal_texture_index != null_texture) {
 
-        // Unpack from [0, 1] to [-1, 1]
-        sampled_normal = sampled_normal * 2.0 - 1.0;
+            // Fetch the RAW normal map in the [0, 1] range (the purple image)
+            vec3 raw_normal_map = sample_texture(material.normal_texture_index, normal_uv, vec4(0.5, 0.5, 1.0, 1.0)).rgb;
 
-        sampled_normal.y = -sampled_normal.y;
+            // VISUALIZER: Overwrite the albedo so we see the purple normal map instead of the base color
+            //out_albedo = raw_normal_map;
 
-        sampled_normal.xy *= 1.8;
+            // Do the standard math to actually apply the physical bump to the lighting
+            vec3 sampled_normal = raw_normal_map * 2.0 - 1.0;
+            float normal_intensity = 1.0;
+            sampled_normal.xy *= normal_intensity;
+            sampled_normal.z = sqrt(clamp(1.0 - dot(sampled_normal.xy, sampled_normal.xy), 0.0, 1.0));
+            sampled_normal = normalize(sampled_normal);
 
-        //final_normal = normalize(TBN * sampled_normal);
+            final_normal = normalize(TBN * sampled_normal);
+        }
     }
 
-
-    // payload
+    // 7. Final Payload Construction
     payload.dist = gl_HitTEXT;
     payload.emission = final_emission;
-    payload.albedo_packed = packUnorm4x8(vec4(base_color.rgb, 1.0));
-    payload.normal_packed = pack_normal(final_normal); // PACK THE NORMAL MAPPED NORMAL
+    payload.albedo_packed = packUnorm4x8(vec4(out_albedo, 1.0)); // Uses our overridden albedo
+    payload.normal_packed = pack_normal(final_normal);
     payload.material_info = packHalf2x16(vec2(material.roughness_factor, material.metallic_factor));
     payload.transmission_ior_packed = packHalf2x16(vec2(material.transmission_factor, material.ior));
 }
