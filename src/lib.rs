@@ -602,7 +602,7 @@ impl Renderer {
 
     pub fn load_scene(&mut self, scene: &crate::Scene, scene_data: crate::SceneData) -> SrResult<()> {
         let (blas_instances, materials, textures, samplers, images, emissive_triangles) =
-            scene.load_into_gpu(&self.core, &mut self.blases, scene_data)?;
+            scene.load_into_gpu(&self.core, &mut self.blases,  scene_data)?;
 
         let fallback_texture = vulkan_abstraction::Texture(&self.fallback_texture_image, &self.fallback_texture_sampler);
         self.tlas.rebuild(&blas_instances,&mut self.instances_buffer)?;

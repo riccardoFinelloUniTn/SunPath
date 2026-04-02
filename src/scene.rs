@@ -38,7 +38,7 @@ impl Scene {
         Vec<vulkan_abstraction::gltf::Texture>,
         Vec<vulkan_abstraction::image::Sampler>,
         Vec<vulkan_abstraction::Image>,
-        Vec<vulkan_abstraction::gltf::EmissiveTriangle>
+        Vec<vulkan_abstraction::gltf::EmissiveTriangle>,
     )> {
         blases.clear();
 
@@ -92,7 +92,88 @@ impl Scene {
 
         let images: Result<Vec<_>, _> = scene_data.images.into_iter().map(|image| to_vk_image(core, image)).collect();
 
-        Ok((blas_instances, materials, scene_data.textures, samplers?, images?, emissive_triangles))
+        Ok((
+            blas_instances,
+            materials,
+            scene_data.textures,
+            samplers?,
+            images?,
+            emissive_triangles,
+        ))
+    }
+
+    pub fn update_gpu_data<'a>(
+        &self,
+        core: &Rc<vulkan_abstraction::Core>,
+        blases: &'a mut Vec<vulkan_abstraction::BLAS> ,
+        blases_instances : &'a mut Vec<vulkan_abstraction::BlasInstance<'a>>,
+        mut scene_data: crate::SceneData,
+    ) -> SrResult<(
+        Vec<vulkan_abstraction::gltf::Material>,
+        Vec<vulkan_abstraction::gltf::Texture>,
+        Vec<vulkan_abstraction::image::Sampler>,
+        Vec<vulkan_abstraction::Image>,
+        Vec<vulkan_abstraction::gltf::EmissiveTriangle>,
+    )> {
+        
+
+        let mut blas_instances_info = vec![];
+        let mut materials = vec![];
+        let mut emissive_triangles = vec![];
+
+        let mut primitives_blas_index: HashMap<vulkan_abstraction::gltf::PrimitiveUniqueKey, usize> = HashMap::new();
+        for node in self.nodes() {
+            self.explore_node(
+                node,
+                core,
+                blases,
+                &mut blas_instances_info,
+                &mut primitives_blas_index,
+                &mut materials,
+                &mut scene_data,
+                &mut emissive_triangles,
+            )?;
+        }
+
+        blases_instances.append(&mut blas_instances_info
+            .into_iter()
+            .enumerate()
+            .map(
+                |( blas_instance_index, (blas_index, transform))| vulkan_abstraction::BlasInstance {
+                    blas_instance_index:( blas_instance_index + blases_instances.len()  ) as u32,
+                    blas: &blases[blas_index],
+                    transform: to_vk_transform(transform),
+                },
+            )
+            .collect::<Vec<_>>());
+
+        let samplers: Result<Vec<_>, _> = scene_data
+            .samplers
+            .iter()
+            .map(|sampler| {
+                let default = gltf::texture::MinFilter::Linear;
+
+                vulkan_abstraction::image::Sampler::new(
+                    core.clone(),
+                    vk::Filter::from_gltf(sampler.min_filter.unwrap_or(default)),
+                    vk::Filter::from_gltf(sampler.mag_filter.unwrap_or(gltf::texture::MagFilter::Linear)),
+                    vk::SamplerAddressMode::from_gltf(sampler.wrap_s_u),
+                    vk::SamplerAddressMode::from_gltf(sampler.wrap_t_v),
+                    vk::SamplerAddressMode::REPEAT,
+                    vk::SamplerMipmapMode::from_gltf(sampler.min_filter.unwrap_or(default)),
+                )
+            })
+            .collect();
+
+        let images: Result<Vec<_>, _> = scene_data.images.into_iter().map(|image| to_vk_image(core, image)).collect();
+
+        Ok((
+            materials,
+            scene_data.textures,
+            samplers?,
+            images?,
+            emissive_triangles,
+        ))
     }
 
     fn explore_node(
@@ -104,7 +185,7 @@ impl Scene {
         primitives_blas_index: &mut HashMap<vulkan_abstraction::gltf::PrimitiveUniqueKey, usize>,
         materials: &mut Vec<vulkan_abstraction::gltf::Material>,
         scene_data: &mut crate::SceneData,
-        emissive_triangles: &mut Vec<vulkan_abstraction::gltf::EmissiveTriangle>
+        emissive_triangles: &mut Vec<vulkan_abstraction::gltf::EmissiveTriangle>,
     ) -> SrResult<()> {
         if let Some(mesh) = node.mesh() {
             for primitive in mesh.primitives() {
@@ -119,7 +200,7 @@ impl Scene {
                             core.clone(),
                             primitive_data.vertex_buffer,
                             primitive_data.index_buffer,
-                            false
+                            false,
                         )?;
                         blases.push(blas);
 
@@ -138,7 +219,7 @@ impl Scene {
                         material.emissive_factor[0] * material.emissive_strength,
                         material.emissive_factor[1] * material.emissive_strength,
                         material.emissive_factor[2] * material.emissive_strength,
-                        0.0
+                        0.0,
                     ];
 
                     for local_tri in &primitive.local_emissive_triangles {

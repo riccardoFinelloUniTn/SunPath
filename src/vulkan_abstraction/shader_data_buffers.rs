@@ -138,7 +138,7 @@ impl ShaderDataBuffers {
 
         Ok(())
     }
-
+    //TODO fix reallocation on update 
     pub fn update(
         &mut self,
         blas_instances: &[vulkan_abstraction::BlasInstance],
@@ -150,12 +150,14 @@ impl ShaderDataBuffers {
         default_sampler: &vulkan_abstraction::Sampler,
         emissive_triangles: &[vulkan_abstraction::gltf::EmissiveTriangle],
     ) -> SrResult<()> {
-        self.set_meshes_info(blas_instances, materials)?;
+        self.set_meshes_info(blas_instances, materials)?; //reallocation 
         self.set_textures(images, samplers, textures, fallback, default_sampler);
         self.set_emissive_triangles(emissive_triangles)?;
 
         Ok(())
     }
+
+
 
     fn set_emissive_triangles(
         &mut self,
@@ -183,7 +185,7 @@ impl ShaderDataBuffers {
         }
         Ok(())
     }
-
+   
     fn set_meshes_info(
         &mut self,
         blas_instances: &[vulkan_abstraction::BlasInstance],
@@ -196,12 +198,15 @@ impl ShaderDataBuffers {
                 material: Material::from(material),
             })
             .collect::<Vec<_>>();
-
+        
+        
+                
         self.meshes_info_storage_buffer = vulkan_abstraction::Buffer::new_storage_from_data(
             Rc::clone(&self.core),
             &meshes_info_storage_buffer_contents,
             "meshes info storage buffer",
-        )?;
+        )?; 
+        
 
         Ok(())
     }
