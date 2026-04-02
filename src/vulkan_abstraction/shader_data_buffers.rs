@@ -4,6 +4,7 @@ use ash::vk;
 use nalgebra as na;
 
 use crate::{CameraMatrices, error::SrResult, vulkan_abstraction};
+use crate::vulkan_abstraction::{Buffer, HostAccessibleBuffer};
 
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
@@ -95,9 +96,9 @@ struct MeshesInfoBufferContents {
 }
 
 pub(crate) struct ShaderDataBuffers {
-    matrices_uniform_buffer: vulkan_abstraction::Buffer,
-    meshes_info_storage_buffer: vulkan_abstraction::Buffer,
-    emissive_triangles_storage_buffer: vulkan_abstraction::Buffer,
+    matrices_uniform_buffer: vulkan_abstraction::UniformBuffer<MatricesBufferContents>,
+    meshes_info_storage_buffer: vulkan_abstraction::GpuOnlyBuffer<MeshesInfoBufferContents>,
+    emissive_triangles_storage_buffer: vulkan_abstraction::GpuOnlyBuffer<vulkan_abstraction::gltf::EmissiveTriangle>,
     textures: Vec<(vk::Sampler, vk::ImageView)>,
 
     core: Rc<vulkan_abstraction::Core>,
@@ -107,12 +108,12 @@ impl ShaderDataBuffers {
     pub const NUMBER_OF_SAMPLERS: usize = 1024;
 
     pub fn new_empty(core: Rc<vulkan_abstraction::Core>) -> SrResult<Self> {
-        let matrices_uniform_buffer = vulkan_abstraction::Buffer::new_uniform::<MatricesBufferContents>(Rc::clone(&core), 1)?;
+        let matrices_uniform_buffer = vulkan_abstraction::UniformBuffer::new(Rc::clone(&core), 1)?;
 
         Ok(Self {
             matrices_uniform_buffer,
-            meshes_info_storage_buffer: vulkan_abstraction::Buffer::new_null(Rc::clone(&core)),
-            emissive_triangles_storage_buffer: vulkan_abstraction::Buffer::new_null(Rc::clone(&core)),
+            meshes_info_storage_buffer: vulkan_abstraction::GpuOnlyBuffer::new_null(Rc::clone(&core)),
+            emissive_triangles_storage_buffer: vulkan_abstraction::GpuOnlyBuffer::new_null(Rc::clone(&core)),
             textures: Vec::new(),
             core,
         })
@@ -128,7 +129,7 @@ impl ShaderDataBuffers {
         }: CameraMatrices,
     ) -> SrResult<()> {
 
-        let mem = self.matrices_uniform_buffer.map::<MatricesBufferContents>()?;
+        let mem = self.matrices_uniform_buffer.map_mut()?;
         mem[0] = MatricesBufferContents {
             view_inverse,
             proj_inverse,
@@ -139,9 +140,9 @@ impl ShaderDataBuffers {
         Ok(())
     }
     //TODO fix reallocation on update 
-    pub fn update(
+    pub fn update<'a, V, I>(
         &mut self,
-        blas_instances: &[vulkan_abstraction::BlasInstance],
+        blas_instances: &[vulkan_abstraction::BlasInstance<'a, V, I>],
         materials: &[vulkan_abstraction::gltf::Material],
         images: &[vulkan_abstraction::Image],
         samplers: &[vulkan_abstraction::Sampler],
@@ -171,24 +172,26 @@ impl ShaderDataBuffers {
                 v2: [0.0; 4],
                 emission: [0.0; 4],
             }];
-            self.emissive_triangles_storage_buffer = vulkan_abstraction::Buffer::new_storage_from_data(
+            self.emissive_triangles_storage_buffer = vulkan_abstraction::GpuOnlyBuffer::new_from_data(
                 Rc::clone(&self.core),
                 &dummy,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
                 "emissive triangles dummy storage buffer",
             )?;
         } else {
-            self.emissive_triangles_storage_buffer = vulkan_abstraction::Buffer::new_storage_from_data(
+            self.emissive_triangles_storage_buffer = vulkan_abstraction::GpuOnlyBuffer::new_from_data(
                 Rc::clone(&self.core),
                 emissive_triangles,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
                 "emissive triangles storage buffer",
             )?;
         }
         Ok(())
     }
    
-    fn set_meshes_info(
+    fn set_meshes_info<'a, V, I>(
         &mut self,
-        blas_instances: &[vulkan_abstraction::BlasInstance],
+        blas_instances: &[vulkan_abstraction::BlasInstance<'a, V, I>],
         materials: &[vulkan_abstraction::gltf::Material],
     ) -> SrResult<()> {
         let meshes_info_storage_buffer_contents = std::iter::zip(blas_instances.iter(), materials.iter())
@@ -201,11 +204,12 @@ impl ShaderDataBuffers {
         
         
                 
-        self.meshes_info_storage_buffer = vulkan_abstraction::Buffer::new_storage_from_data(
+        self.meshes_info_storage_buffer = vulkan_abstraction::GpuOnlyBuffer::new_from_data(
             Rc::clone(&self.core),
             &meshes_info_storage_buffer_contents,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
             "meshes info storage buffer",
-        )?; 
+        )?;
         
 
         Ok(())

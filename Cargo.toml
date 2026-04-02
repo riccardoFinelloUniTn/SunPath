@@ -1,7 +1,7 @@
 [package]
 name = "sunray"
 version = "0.2.0"
-edition = "2024"
+edition = "2021"
 license = "AGPL-3.0-only"
 description = "hardware ray-tracing library"
 repository = "https://github.com/Kalsifer-742/sunray.git"

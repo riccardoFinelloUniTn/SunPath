@@ -16,7 +16,7 @@ use ash::vk;
 use crate::utils::env_var_as_bool;
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
-use crate::vulkan_abstraction::{BlasInstance, BlasMetaData, BlasState, Buffer, DenoiseDescriptorSetLayout, DenoisePass, Dynamic, PostProcessDescriptorSets, PostprocessPass, TemporalPass};
+use crate::vulkan_abstraction::{BlasMetaData, BlasState, DenoiseDescriptorSetLayout, DenoisePass, Dynamic, PostProcessDescriptorSets, PostprocessPass, TemporalPass};
 
 pub const DENOISE_PASSES: u32 = 5;
 
@@ -58,12 +58,12 @@ pub struct Renderer {
 
     shader_data_buffers: vulkan_abstraction::ShaderDataBuffers,
 
-    blases: Vec<vulkan_abstraction::BLAS>,
-    tlas: vulkan_abstraction::TLAS,
+    blases: Vec<vulkan_abstraction::BLAS<vulkan_abstraction::gltf::Vertex>>,
+    tlas: vulkan_abstraction::TLAS<vulkan_abstraction::gltf::Vertex>,
 
     is_tlas_dirty : bool,
 
-    instances_buffer: vulkan_abstraction::Buffer,
+    instances_buffer: vulkan_abstraction::GpuOnlyBuffer<vk::AccelerationStructureInstanceKHR>,
     cpu_instances_data: Vec<vulkan_abstraction::BlasMetaData>,
 
     scene_images: Vec<vulkan_abstraction::Image>,
@@ -134,13 +134,12 @@ impl Renderer {
 
         let image_extent = utils::tuple_to_extent3d(image_extent);
 
-        let mut instances_buffer = vulkan_abstraction::Buffer::new::<vk::AccelerationStructureInstanceKHR>(
+        let mut instances_buffer = vulkan_abstraction::GpuOnlyBuffer::new(
             Rc::clone(&core),
-            MAX_TLAS_INSTANCES, // Numero di elementi
-            gpu_allocator::MemoryLocation::CpuToGpu, // This uses reBar when possible
-            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS, //TODO flags were temporary
+            MAX_TLAS_INSTANCES,
+            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
             "Persistent TLAS Instances Buffer",
-        )?; //TODO const value a caso
+        )?;
 
 
         let blases = vec![];
@@ -504,7 +503,7 @@ impl Renderer {
                 }
             }
 
-            let raytracing_descriptor_sets = vulkan_abstraction::RaytracingDescriptorSets::new(
+            let raytracing_descriptor_sets = vulkan_abstraction::RaytracingDescriptorSets::new::<vulkan_abstraction::gltf::Vertex, u32>(
                 Rc::clone(&self.core),
                 &self.ray_tracing_descriptor_set_layout,
                 &self.tlas,
@@ -1532,15 +1531,15 @@ impl Renderer {
         //     blas
         // }
 
-        let blas_instances = &self.cpu_instances_data.iter().enumerate().map(|(index, cpu_instance)|{
-            BlasInstance{
+        let blas_instances: Vec<vulkan_abstraction::BlasInstance<'_, vulkan_abstraction::gltf::Vertex, u32>> = self.cpu_instances_data.iter().enumerate().map(|(index, cpu_instance)|{
+            vulkan_abstraction::BlasInstance{
                 blas: &self.blases[index],
                 transform: cpu_instance.transform,
                 blas_instance_index: cpu_instance.blas_instance_index,
             }
         }).collect::<Vec<_>>();
 
-        self.tlas.update(blas_instances, &mut self.instances_buffer )?;
+        self.tlas.update(&blas_instances, &mut self.instances_buffer )?;
         Ok(())
     }
 
@@ -1550,15 +1549,15 @@ impl Renderer {
         // NOTE: For better performance later, you can swap `rebuild` for an `update`
         // command if your TLAS abstraction supports VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
 
-        let blas_instances = &self.cpu_instances_data.iter().enumerate().map(|(index, cpu_instance)|{
-            BlasInstance{
+        let blas_instances: Vec<vulkan_abstraction::BlasInstance<'_, vulkan_abstraction::gltf::Vertex, u32>> = self.cpu_instances_data.iter().enumerate().map(|(index, cpu_instance)|{
+            vulkan_abstraction::BlasInstance{
                 blas: &self.blases[index],
                 transform: cpu_instance.transform,
                 blas_instance_index: cpu_instance.blas_instance_index,
             }
         }).collect::<Vec<_>>();
 
-        self.tlas.update(blas_instances, &mut self.instances_buffer )?;
+        self.tlas.update(&blas_instances, &mut self.instances_buffer )?;
         Ok(())
     }
 }

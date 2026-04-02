@@ -10,12 +10,13 @@ use crate::{error::*, vulkan_abstraction};
 // - https://github.com/SaschaWillems/Vulkan
 
 // TODO: implement drop
-pub struct TLAS {
+pub struct TLAS<V, I = u32> {
     tlas: vulkan_abstraction::AccelerationStructure,
+    _phantom: std::marker::PhantomData<(V, I)>,
 }
 
-impl TLAS {
-    pub fn new(core: Rc<vulkan_abstraction::Core>, blas_instances: &[vulkan_abstraction::BlasInstance], instances_buffer: & mut vulkan_abstraction::Buffer) -> SrResult<Self> {
+impl<V, I> TLAS<V, I> {
+    pub fn new(core: Rc<vulkan_abstraction::Core>, blas_instances: &[vulkan_abstraction::BlasInstance<V, I>], instances_buffer: &mut vulkan_abstraction::GpuOnlyBuffer<vk::AccelerationStructureInstanceKHR>) -> SrResult<Self> {
         Self::insert_in_instances_buffer(Rc::clone(&core), blas_instances, instances_buffer)?;
 
         let geometry = Self::make_geometry(&instances_buffer);
@@ -31,7 +32,7 @@ impl TLAS {
             false
         )?;
 
-        Ok(Self { tlas })
+        Ok(Self { tlas, _phantom: std::marker::PhantomData })
     }
     /// "the application must not use an update operation to do any of the following:
     /// - Change primitives or instances from active to inactive, or vice versa
@@ -46,9 +47,9 @@ impl TLAS {
     /// - Change one or more transform matrices
     /// - switch one BLAS instance for another, possibly to switch LODs
     #[allow(unused)]
-    pub fn update(&mut self, blas_instances: &[vulkan_abstraction::BlasInstance] , instances_buffer: & mut vulkan_abstraction::Buffer ) -> SrResult<()> {
+    pub fn update(&mut self, blas_instances: &[vulkan_abstraction::BlasInstance<V, I>], instances_buffer: &mut vulkan_abstraction::GpuOnlyBuffer<vk::AccelerationStructureInstanceKHR>) -> SrResult<()> {
         if !self.tlas.allow_update { return SrResult::Err(SrError::new_custom("The structure is not updatable".to_string())); }
-        Self::insert_in_instances_buffer(Rc::clone(self.tlas.core()), blas_instances , instances_buffer)?;
+        Self::insert_in_instances_buffer::<V, I>(Rc::clone(self.tlas.core()), blas_instances , instances_buffer)?;
 
         let geometry = Self::make_geometry(&instances_buffer);
 
@@ -60,8 +61,8 @@ impl TLAS {
     }
 
     #[allow(unused)]
-    pub fn rebuild(&mut self, blas_instances: &[vulkan_abstraction::BlasInstance] , instances_buffer: & mut vulkan_abstraction::Buffer) -> SrResult<()> {
-        Self::insert_in_instances_buffer(Rc::clone(self.tlas.core()), blas_instances , instances_buffer)?;
+    pub fn rebuild(&mut self, blas_instances: &[vulkan_abstraction::BlasInstance<V, I>], instances_buffer: &mut vulkan_abstraction::GpuOnlyBuffer<vk::AccelerationStructureInstanceKHR>) -> SrResult<()> {
+        Self::insert_in_instances_buffer::<V, I>(Rc::clone(self.tlas.core()), blas_instances , instances_buffer)?;
 
         let geometry = Self::make_geometry(&instances_buffer);
 
@@ -73,10 +74,10 @@ impl TLAS {
     }
 
     //TODO questo deve essere diviso in oggetti statici e non per ottimizzare al meglio l'allocazione e cosa succede se fallisce
-    fn insert_in_instances_buffer<'a>(
+    fn insert_in_instances_buffer<'a, V, I>(
         core: Rc<vulkan_abstraction::Core>,
-        blas_instances: &[vulkan_abstraction::BlasInstance],
-        instances_buffer: & mut vulkan_abstraction::Buffer,
+        blas_instances: &[vulkan_abstraction::BlasInstance<'a, V, I>],
+        instances_buffer: &mut vulkan_abstraction::GpuOnlyBuffer<vk::AccelerationStructureInstanceKHR>,
     ) -> SrResult<()> {
         let blas_instances: Vec<vk::AccelerationStructureInstanceKHR> = blas_instances
             .iter()
@@ -110,7 +111,7 @@ impl TLAS {
         //     "TLAS instances buffer",
         // )?;
 
-        let mapped_memory = instances_buffer.map::<vk::AccelerationStructureInstanceKHR>()?;
+        let mapped_memory = instances_buffer.map_mut::<vk::AccelerationStructureInstanceKHR>()?;
 
         // 2. Scrivi i dati sovrascrivendo quelli vecchi
         for (i, instance) in blas_instances.iter().enumerate() {
@@ -125,7 +126,7 @@ impl TLAS {
         Ok(())
     }
 
-    fn make_geometry(instances_buffer: &vulkan_abstraction::Buffer) -> vk::AccelerationStructureGeometryKHR<'_> {
+    fn make_geometry(instances_buffer: &vulkan_abstraction::GpuOnlyBuffer<vk::AccelerationStructureInstanceKHR>) -> vk::AccelerationStructureGeometryKHR<'_> {
         vk::AccelerationStructureGeometryKHR::default()
             .geometry_type(vk::GeometryTypeKHR::INSTANCES)
             .flags(vk::GeometryFlagsKHR::OPAQUE)

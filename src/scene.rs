@@ -7,11 +7,11 @@ use nalgebra as na;
 
 type BlasInstanceInfo = (usize, na::Matrix4<f32>);
 
-pub struct SceneData<T,Y> {
+pub struct SceneData {
     pub textures: Vec<vulkan_abstraction::gltf::Texture>,
     pub samplers: Vec<vulkan_abstraction::gltf::Sampler>,
     pub images: Vec<vulkan_abstraction::gltf::Image>,
-    pub primitive_data_map: vulkan_abstraction::gltf::PrimitiveDataMap<T,Y>,
+    pub primitive_data_map: vulkan_abstraction::gltf::PrimitiveDataMap,
 }
 
 pub struct Scene {
@@ -30,10 +30,10 @@ impl Scene {
     pub fn load_into_gpu<'a>(
         &self,
         core: &Rc<vulkan_abstraction::Core>,
-        blases: &'a mut Vec<vulkan_abstraction::BLAS>,
+        blases: &'a mut Vec<vulkan_abstraction::BLAS<vulkan_abstraction::gltf::Vertex>>,
         mut scene_data: crate::SceneData,
     ) -> SrResult<(
-        Vec<vulkan_abstraction::BlasInstance<'a>>,
+        Vec<vulkan_abstraction::BlasInstance<'a, vulkan_abstraction::gltf::Vertex, u32>>,
         Vec<vulkan_abstraction::gltf::Material>,
         Vec<vulkan_abstraction::gltf::Texture>,
         Vec<vulkan_abstraction::image::Sampler>,
@@ -105,8 +105,8 @@ impl Scene {
     pub fn update_gpu_data<'a>(
         &self,
         core: &Rc<vulkan_abstraction::Core>,
-        blases: &'a mut Vec<vulkan_abstraction::BLAS> ,
-        blases_instances : &'a mut Vec<vulkan_abstraction::BlasInstance<'a>>,
+        blases: &'a mut Vec<vulkan_abstraction::BLAS<vulkan_abstraction::gltf::Vertex>>,
+        blases_instances : &'a mut Vec<vulkan_abstraction::BlasInstance<'a, vulkan_abstraction::gltf::Vertex, u32>>,
         mut scene_data: crate::SceneData,
     ) -> SrResult<(
         Vec<vulkan_abstraction::gltf::Material>,
@@ -180,7 +180,7 @@ impl Scene {
         &self,
         node: &vulkan_abstraction::gltf::Node,
         core: &Rc<vulkan_abstraction::Core>,
-        blases: &mut Vec<vulkan_abstraction::BLAS>,
+        blases: &mut Vec<vulkan_abstraction::BLAS<vulkan_abstraction::gltf::Vertex>>,
         blas_instances_info: &mut Vec<BlasInstanceInfo>,
         primitives_blas_index: &mut HashMap<vulkan_abstraction::gltf::PrimitiveUniqueKey, usize>,
         materials: &mut Vec<vulkan_abstraction::gltf::Material>,

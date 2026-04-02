@@ -198,7 +198,7 @@ impl<T> StagingBuffer<T> {
         })
     }
 
-    fn new_from_data(core: Rc<vulkan_abstraction::Core>, data: &[T]) -> SrResult<Self>
+    pub fn new_from_data(core: Rc<vulkan_abstraction::Core>, data: &[T]) -> SrResult<Self>
     where
         T: Copy,
     {

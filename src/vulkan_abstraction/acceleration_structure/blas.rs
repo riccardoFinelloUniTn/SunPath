@@ -2,12 +2,12 @@ use std::rc::Rc;
 
 use crate::error::*;
 use crate::vulkan_abstraction;
-use crate::vulkan_abstraction::{IndexBuffer, VertexBuffer};
+use crate::vulkan_abstraction::{Buffer, IndexBuffer, VertexBuffer};
 use ash::vk;
 use ash::vk::AccelerationStructureBuildRangeInfoKHR;
 
-pub struct BlasInstance<'a> {
-    pub blas: &'a vulkan_abstraction::BLAS,
+pub struct BlasInstance<'a, V, I = u32> {
+    pub blas: &'a vulkan_abstraction::BLAS<V, I>,
     pub transform: vk::TransformMatrixKHR,
     pub blas_instance_index: u32, // contains the index of the instance, NOT of the blas, so we can fetch instance-specific information in the shader, by passing it as gl_InstanceCustomIndexEXT
 }
@@ -30,23 +30,23 @@ pub struct Dynamic {
 }
 
 // Bottom-Level Acceleration Structure
-pub struct BLAS {
+pub struct BLAS<V, I = u32> {
     blas: vulkan_abstraction::AccelerationStructure,
     #[allow(unused)]
-    vertex_buffer: vulkan_abstraction::VertexBuffer,
+    vertex_buffer: vulkan_abstraction::VertexBuffer<V>,
     #[allow(unused)]
-    index_buffer: vulkan_abstraction::IndexBuffer<u32>,
+    index_buffer: vulkan_abstraction::IndexBuffer<I>,
     #[allow(unused)]
     is_dirty: bool,
     pub state: BlasState,
 }
 //TODO for nopw it can only have one geometry per blas
-impl BLAS {
+impl<V, I> BLAS<V, I> {
     /// the vertex_buffer is assumed to have a vec3 position attribute as its first (not necessarily the only) attribute in memory
     pub fn new(
         core: Rc<vulkan_abstraction::Core>,
-        vertex_buffer: vulkan_abstraction::VertexBuffer,
-        index_buffer: vulkan_abstraction::IndexBuffer,
+        vertex_buffer: vulkan_abstraction::VertexBuffer<V>,
+        index_buffer: vulkan_abstraction::IndexBuffer<I>,
         fast_build: bool,
     ) -> SrResult<Self> {
         /*
@@ -85,7 +85,7 @@ impl BLAS {
 
 
 
-    fn make_geometry<'a>(vertex_buffer: &VertexBuffer, index_buffer: &IndexBuffer) -> vk::AccelerationStructureGeometryKHR<'a> {
+    fn make_geometry<'a>(vertex_buffer: &VertexBuffer<V>, index_buffer: &IndexBuffer<I>) -> vk::AccelerationStructureGeometryKHR<'a> {
         let geometry_data = vk::AccelerationStructureGeometryDataKHR {
             triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
                 .vertex_data(vk::DeviceOrHostAddressConstKHR {
@@ -109,8 +109,8 @@ impl BLAS {
     #[allow(unused)]
     pub fn rebuild(
         &mut self,
-        vertex_buffer: vulkan_abstraction::VertexBuffer,
-        index_buffer: vulkan_abstraction::IndexBuffer,
+        vertex_buffer: vulkan_abstraction::VertexBuffer<V>,
+        index_buffer: vulkan_abstraction::IndexBuffer<I>,
         fast_build: bool,
     ) -> SrResult<()> {
 
@@ -124,7 +124,7 @@ impl BLAS {
         Ok(())
     }
 
-    fn make_build_range_info(index_buffer: &IndexBuffer) -> AccelerationStructureBuildRangeInfoKHR {
+    fn make_build_range_info(index_buffer: &IndexBuffer<I>) -> AccelerationStructureBuildRangeInfoKHR {
 
         let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR::default()
             // the value of first_vertex is added to index values before fetching verts
@@ -157,11 +157,11 @@ impl BLAS {
         self.blas.inner()
     }
 
-    pub fn vertex_buffer(&self) -> &vulkan_abstraction::VertexBuffer {
+    pub fn vertex_buffer(&self) -> &vulkan_abstraction::VertexBuffer<V> {
         &self.vertex_buffer
     }
 
-    pub fn index_buffer(&self) -> &vulkan_abstraction::IndexBuffer {
+    pub fn index_buffer(&self) -> &vulkan_abstraction::IndexBuffer<I> {
         &self.index_buffer
     }
 }
