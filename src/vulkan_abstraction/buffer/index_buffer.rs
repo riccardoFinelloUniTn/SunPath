@@ -3,16 +3,20 @@ use std::{any::TypeId, ops::Deref, rc::Rc};
 use ash::vk;
 
 use crate::vulkan_abstraction::buffer::Buffer;
+use crate::vulkan_abstraction::GpuOnlyBuffer;
 use crate::{error::*, vulkan_abstraction};
 
-pub struct IndexBuffer {
-    buffer: Buffer,
+pub struct IndexBuffer<T> {
+    buffer: GpuOnlyBuffer<T>,
     len: usize,
     idx_type: vk::IndexType,
 }
-impl IndexBuffer {
+impl<T> IndexBuffer<T> {
     //build an index buffer with flags for usage in a blas
-    pub fn new_for_blas_from_data<T: 'static + Copy>(core: Rc<vulkan_abstraction::Core>, data: &[T]) -> SrResult<Self> {
+    pub fn new_for_blas_from_data(core: Rc<vulkan_abstraction::Core>, data: &[T]) -> SrResult<Self>
+    where
+        T: 'static + Copy,
+    {
         let usage_flags = vk::BufferUsageFlags::INDEX_BUFFER
             | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
             | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
@@ -26,13 +30,7 @@ impl IndexBuffer {
             }
         };
 
-        let buffer = Buffer::new_from_data(
-            core,
-            data,
-            gpu_allocator::MemoryLocation::GpuOnly,
-            usage_flags,
-            "index buffer for BLAS usage",
-        )?;
+        let buffer = GpuOnlyBuffer::new_from_data(core, data, usage_flags, "index buffer for BLAS usage")?;
 
         Ok(Self {
             buffer,
@@ -40,7 +38,10 @@ impl IndexBuffer {
             idx_type,
         })
     }
-    pub fn new_for_blas<T: 'static>(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self> {
+    pub fn new_for_blas(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self>
+    where
+        T: 'static,
+    {
         let usage_flags = vk::BufferUsageFlags::TRANSFER_DST
             | vk::BufferUsageFlags::INDEX_BUFFER
             | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -55,10 +56,9 @@ impl IndexBuffer {
             }
         };
 
-        let buffer = Buffer::new::<T>(
+        let buffer = GpuOnlyBuffer::new(
             core,
             len,
-            gpu_allocator::MemoryLocation::GpuOnly,
             usage_flags,
             "index buffer for BLAS usage",
         )?;
@@ -66,7 +66,7 @@ impl IndexBuffer {
         Ok(Self { buffer, len, idx_type })
     }
     #[allow(dead_code)]
-    pub fn buffer(&self) -> &Buffer {
+    pub fn buffer(&self) -> &GpuOnlyBuffer<T> {
         &self.buffer
     }
     pub fn len(&self) -> usize {
@@ -76,8 +76,8 @@ impl IndexBuffer {
         self.idx_type
     }
 }
-impl Deref for IndexBuffer {
-    type Target = Buffer;
+impl<T> Deref for IndexBuffer<T> {
+    type Target = GpuOnlyBuffer<T>;
     fn deref(&self) -> &Self::Target {
         &self.buffer
     }
