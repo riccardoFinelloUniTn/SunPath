@@ -14,7 +14,7 @@ pub struct AccelerationStructure {
     core: Rc<vulkan_abstraction::Core>,
     handle: vk::AccelerationStructureKHR,
     #[allow(dead_code)]
-    buffer: vulkan_abstraction::GpuOnlyBuffer<u8>,
+    buffer: vulkan_abstraction::GpuOnlyBuffer,
     allow_update: bool,
     level: vk::AccelerationStructureTypeKHR,
     number_of_geometries: usize,
@@ -78,7 +78,7 @@ impl AccelerationStructure {
             vk::AccelerationStructureTypeKHR::GENERIC => "generic acceleration structure buffer",
             _ => "(unknown AS type) acceleration structure buffer",
         };
-        let buffer = vulkan_abstraction::GpuOnlyBuffer::new(
+        let buffer = vulkan_abstraction::GpuOnlyBuffer::new::<u8>(
             Rc::clone(&core),
             acceleration_structure_size_info.acceleration_structure_size as usize,
             vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
@@ -102,9 +102,12 @@ impl AccelerationStructure {
         }?;
 
         // the scratch buffer that will be used for building the acceleration structure (and can be dropped afterwards)
-        let scratch_buffer: vulkan_abstraction::buffer::GpuOnlyBuffer<T> = vulkan_abstraction::GpuOnlyBuffer::new(
+        let scratch_buffer = vulkan_abstraction::GpuOnlyBuffer::new_aligned::<u8>(
             Rc::clone(&core),
             acceleration_structure_size_info.build_scratch_size as usize,
+            core.device()
+                .acceleration_structure_properties()
+                .min_acceleration_structure_scratch_offset_alignment as u64,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
             "acceleration structure build scratch buffer",
         )?;
@@ -222,7 +225,7 @@ impl AccelerationStructure {
         };
 
         // the scratch buffer that will be used for building the acceleration structure (and can be dropped afterwards)
-        let scratch_buffer = vulkan_abstraction::GpuOnlyBuffer::new(
+        let scratch_buffer = vulkan_abstraction::GpuOnlyBuffer::new::<u8>(
             Rc::clone(&self.core),
             size_info.build_scratch_size as usize,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,

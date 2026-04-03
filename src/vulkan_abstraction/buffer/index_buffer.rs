@@ -2,6 +2,7 @@ use std::{any::TypeId, ops::Deref, rc::Rc};
 
 use ash::vk;
 
+use crate::vulkan_abstraction::buffer::Buffer;
 use crate::vulkan_abstraction::GpuOnlyBuffer;
 use crate::{error::*, vulkan_abstraction};
 
@@ -12,7 +13,7 @@ pub struct IndexBuffer {
 }
 impl IndexBuffer {
     //build an index buffer with flags for usage in a blas
-    pub fn new_for_blas_from_data(core: Rc<vulkan_abstraction::Core>, data: &[T]) -> SrResult<Self>
+    pub fn new_for_blas_from_data<T>(core: Rc<vulkan_abstraction::Core>, data: &[T]) -> SrResult<Self>
     where
         T: 'static + Copy,
     {
@@ -37,7 +38,7 @@ impl IndexBuffer {
             idx_type,
         })
     }
-    pub fn new_for_blas(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self>
+    pub fn new_for_blas<T>(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self>
     where
         T: 'static,
     {
@@ -65,7 +66,7 @@ impl IndexBuffer {
         Ok(Self { buffer, len, idx_type })
     }
     #[allow(dead_code)]
-    pub fn buffer(&self) -> &GpuOnlyBuffer {
+    pub fn buffer(&self) -> &GpuOnlyBuffer{
         &self.buffer
     }
     pub fn len(&self) -> usize {
@@ -75,8 +76,8 @@ impl IndexBuffer {
         self.idx_type
     }
 }
-impl<T> Deref for IndexBuffer<T> {
-    type Target = GpuOnlyBuffer<T>;
+impl Deref for IndexBuffer {
+    type Target = GpuOnlyBuffer;
     fn deref(&self) -> &Self::Target {
         &self.buffer
     }

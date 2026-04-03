@@ -4,15 +4,15 @@ use ash::vk;
 
 use crate::{error::*, vulkan_abstraction};
 
-pub struct VertexBuffer<T> {
-    buffer: vulkan_abstraction::GpuOnlyBuffer<T>,
+pub struct VertexBuffer {
+    buffer: vulkan_abstraction::GpuOnlyBuffer,
     len: usize,
     stride: usize,
 }
 
-impl<T> VertexBuffer<T> {
+impl VertexBuffer {
     //build a vertex buffer with flags for usage in a blas
-    pub fn new_for_blas_from_data(core: Rc<vulkan_abstraction::Core>, data: &[T]) -> SrResult<Self> where T : Copy {
+    pub fn new_for_blas_from_data<T: Copy>(core: Rc<vulkan_abstraction::Core>, data: &[T]) -> SrResult<Self> {
         let usage_flags = vk::BufferUsageFlags::TRANSFER_DST
             | vk::BufferUsageFlags::VERTEX_BUFFER
             | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -31,14 +31,14 @@ impl<T> VertexBuffer<T> {
     }
 
     //build a vertex buffer with flags for usage in a blas
-    pub fn new_for_blas(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self> {
+    pub fn new_for_blas<T>(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self> {
         let usage_flags = vk::BufferUsageFlags::TRANSFER_DST
             | vk::BufferUsageFlags::VERTEX_BUFFER
             | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
             | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
 
         Ok(Self {
-            buffer: vulkan_abstraction::GpuOnlyBuffer::new(
+            buffer: vulkan_abstraction::GpuOnlyBuffer::new::<T>(
                 core,
                 len,
                 usage_flags,
@@ -50,7 +50,7 @@ impl<T> VertexBuffer<T> {
     }
 
     #[allow(dead_code)]
-    pub fn buffer(&self) -> &vulkan_abstraction::GpuOnlyBuffer<T> {
+    pub fn buffer(&self) -> &vulkan_abstraction::GpuOnlyBuffer {
         &self.buffer
     }
     pub fn len(&self) -> usize {
@@ -60,8 +60,8 @@ impl<T> VertexBuffer<T> {
         self.stride
     }
 }
-impl<T> Deref for VertexBuffer<T> {
-    type Target = vulkan_abstraction::GpuOnlyBuffer<T>;
+impl Deref for VertexBuffer {
+    type Target = vulkan_abstraction::GpuOnlyBuffer;
     fn deref(&self) -> &Self::Target {
         &self.buffer
     }

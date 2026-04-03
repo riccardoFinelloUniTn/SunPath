@@ -10,6 +10,7 @@ use crate::{error::*, vulkan_abstraction};
 use ash::vk;
 use ash::vk::Handle;
 use std::rc::Rc;
+//TODO divide into a trait gpuonly and hostmemoery accessible and then do custom new functions with custom flags by leveraging strong typing
 
 pub fn get_memory_type_index(
     core: &vulkan_abstraction::Core,
@@ -39,6 +40,11 @@ pub fn get_memory_type_index(
 }
 pub trait Buffer {
     fn inner(&self) -> vk::Buffer;
+
+    fn raw(&self) -> &vulkan_abstraction::RawBuffer;
+
+    fn raw_mut(&mut self) -> &mut vulkan_abstraction::RawBuffer;
+
     fn byte_size(&self) -> vk::DeviceSize;
     fn is_null(&self) -> bool;
     fn get_device_address(&self) -> vk::DeviceAddress;
@@ -50,6 +56,8 @@ pub trait Buffer {
 /// Exclusive trait for host-visible buffers (CpuToGpu or GpuToCpu) that can be mapped.
 pub trait HostAccessibleBuffer<T>: Buffer {
     fn map_mut(&mut self) -> SrResult<&mut [T]>;
+
+    fn map(& self) -> SrResult<& [T]>;
 
     fn len(&self) -> usize ;
 }
@@ -114,7 +122,17 @@ impl RawBuffer {
         }
     }
 
-    pub fn map<V: Sized>(&mut self) -> SrResult<&mut [V]> {
+    pub fn map<V: Sized>(& self) -> SrResult<& [V]> {
+        if !self.buffer.is_null() {
+            let slice = self.allocation.mapped_slice().unwrap();
+            let ret = unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut V, slice.len() / std::mem::size_of::<V>()) };
+            Ok(ret)
+        } else {
+            Ok(&mut [])
+        }
+    }
+
+    pub fn map_mut<V: Sized>(&mut self) -> SrResult<&mut [V]> {
         if !self.buffer.is_null() {
             let slice = self.allocation.mapped_slice_mut().unwrap();
             let ret = unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut V, slice.len() / std::mem::size_of::<V>()) };
@@ -146,6 +164,15 @@ macro_rules! impl_buffer_trait {
                 self.raw.buffer
             }
 
+            fn raw(&self) -> &vulkan_abstraction::RawBuffer {
+                &self.raw
+            }
+
+             fn raw_mut(&mut self) -> &mut vulkan_abstraction::RawBuffer {
+                &mut self.raw
+            }
+
+
             fn byte_size(&self) -> vk::DeviceSize {
                 self.raw.byte_size
             }
@@ -176,6 +203,15 @@ macro_rules! impl_buffer_trait {
             fn inner(&self) -> vk::Buffer {
                 self.raw.buffer
             }
+
+             fn raw(&self) -> &vulkan_abstraction::RawBuffer {
+                &self.raw
+            }
+
+             fn raw_mut(&mut self) -> &mut vulkan_abstraction::RawBuffer {
+                &mut self.raw
+            }
+
 
             fn byte_size(&self) -> vk::DeviceSize {
                 self.raw.byte_size
@@ -212,7 +248,7 @@ pub struct StagingBuffer<T> {
 impl_buffer_trait!(StagingBuffer<T>);
 
 impl<T> StagingBuffer<T> {
-    pub fn new(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self> {
+    pub fn new_temp(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self> {
         let byte_size = (len * std::mem::size_of::<T>()) as vk::DeviceSize;
         let raw = RawBuffer::new_aligned(
             core,
@@ -228,6 +264,23 @@ impl<T> StagingBuffer<T> {
         })
     }
 
+    pub fn new(core: Rc<vulkan_abstraction::Core>, len: usize ,buffer_usage_flags: vk::BufferUsageFlags, name: &'static str ) -> SrResult<Self> {
+        let byte_size = (len * std::mem::size_of::<T>()) as vk::DeviceSize;
+        let raw = RawBuffer::new_aligned(
+            core,
+            byte_size,
+            1,
+            gpu_allocator::MemoryLocation::CpuToGpu,
+            buffer_usage_flags,
+            name,
+        )?;
+        Ok(Self {
+            raw,
+            _marker: PhantomData,
+        })
+    }
+    
+
     pub fn new_from_data(core: Rc<vulkan_abstraction::Core>, data: &[T]) -> SrResult<Self>
     where
         T: Copy,
@@ -236,7 +289,7 @@ impl<T> StagingBuffer<T> {
             return Ok(Self::new_null(core));
         }
 
-        let mut staging_buffer = Self::new(core, data.len())?;
+        let mut staging_buffer = Self::new_temp(core, data.len())?;
 
         let mapped_memory = staging_buffer.map_mut()?;
         mapped_memory[0..data.len()].copy_from_slice(data);
@@ -287,6 +340,10 @@ impl<T> StagingBuffer<T> {
 
 impl<T> HostAccessibleBuffer<T> for StagingBuffer<T> {
     fn map_mut(&mut self) -> SrResult<&mut [T]> {
+        self.raw.map_mut::<T>()
+    }
+
+    fn map(& self) -> SrResult<& [T]> {
         self.raw.map::<T>()
     }
 
@@ -323,6 +380,10 @@ impl<T> UniformBuffer<T> {
 
 impl<T> HostAccessibleBuffer<T> for UniformBuffer<T> {
     fn map_mut(&mut self) -> SrResult<&mut [T]> {
+        self.raw.map_mut::<T>()
+    }
+
+    fn map(& self) -> SrResult<& [T]> {
         self.raw.map::<T>()
     }
 
@@ -358,6 +419,28 @@ impl GpuOnlyBuffer {
             raw,
         })
     }
+
+    pub fn new_aligned<T>(
+        core: Rc<vulkan_abstraction::Core>,
+        len: usize,
+        alignment: u64,
+        usage: vk::BufferUsageFlags,
+        name: &'static str,
+    ) -> SrResult<Self> {
+        let byte_size = (len * std::mem::size_of::<T>()) as vk::DeviceSize;
+        let raw = RawBuffer::new_aligned(
+            core,
+            byte_size,
+            alignment,
+            gpu_allocator::MemoryLocation::GpuOnly,
+            usage | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC,
+            name,
+        )?;
+        Ok(Self {
+            raw,
+        })
+    }
+    
 
     pub fn len<T>(&self) -> usize {
         (self.raw.byte_size as usize) / std::mem::size_of::<T>()
@@ -395,14 +478,14 @@ pub struct ArenaIndexedBuffer<T> {
     free_slots: Vec<usize>, // A simple LIFO stack of available indices
 }
 
-impl<T: Copy> ArenaIndexedBuffer<T> {
+impl<T: Copy> ArenaIndexedBuffer<T> { //TODO handle reqeust to grow
     pub fn new(
         core: Rc<vulkan_abstraction::Core>,
         capacity: usize,
         usage: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
-        let staging = StagingBuffer::new(core.clone(), capacity)?;
+        let staging = StagingBuffer::new(core.clone(), capacity, usage, name)?; //TODO flags
         let gpu_only = GpuOnlyBuffer::new::<T>(core.clone(), capacity, usage, name)?;
 
         // Populate the free list with all available indices
@@ -415,6 +498,9 @@ impl<T: Copy> ArenaIndexedBuffer<T> {
             free_slots,
         })
     }
+
+
+
 
     /// Allocates a slot for new data. Returns the assigned index and the BufferCopy region
     /// that needs to be submitted to a CommandBuffer for GPU synchronization.

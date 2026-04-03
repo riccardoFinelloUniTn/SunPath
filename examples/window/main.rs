@@ -286,7 +286,7 @@ impl App {
 
         
         //TODO it is more costly than expected and need fences and semaphores
-         self.res_mut().renderer.rebuild_tlas()?;
+        //  self.res_mut().renderer.rebuild_tlas()?;
 
         let frame_index = self.frame_count as usize % MAX_FRAMES_IN_FLIGHT;
 
