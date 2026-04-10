@@ -140,7 +140,7 @@ impl Image {
         }
 
         let device = self.core.device().inner();
-        let cmd_buf = vulkan_abstraction::cmd_buffer::new_command_buffer(self.core.cmd_pool(), device)?;
+        let cmd_buf = vulkan_abstraction::cmd_buffer::new_command_buffer(self.core.graphics_cmd_pool(), device)?;
 
         let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
@@ -184,9 +184,9 @@ impl Image {
             device.end_command_buffer(cmd_buf)?;
         }
 
-        self.core.queue().submit_sync(cmd_buf)?;
+        self.core.graphics_queue().submit_sync(cmd_buf)?;
 
-        unsafe { device.free_command_buffers(self.core.cmd_pool().inner(), &[cmd_buf]) };
+        unsafe { device.free_command_buffers(self.core.graphics_cmd_pool().inner(), &[cmd_buf]) };
 
         Ok(())
     }

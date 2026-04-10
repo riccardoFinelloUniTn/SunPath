@@ -4,12 +4,11 @@ use std::{
     ffi::CStr,
 };
 
+use crate::{error::*, vulkan_abstraction};
 use ash::{
     khr,
     vk::{self, FormatFeatureFlags},
 };
-
-use crate::{error::*, vulkan_abstraction};
 
 pub struct Device {
     device: ash::Device,
@@ -18,7 +17,8 @@ pub struct Device {
     physical_device_properties: vk::PhysicalDeviceProperties,
     physical_device_rt_pipeline_properties: vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'static>,
     physical_device_acceleration_structure_properties: vk::PhysicalDeviceAccelerationStructurePropertiesKHR<'static>,
-    queue_family_index: u32,
+    graphics_queue_family_index: u32,
+    transfer_queue_family_index:Option<u32>,
     surface_support_details: Option<RefCell<SurfaceSupportDetails>>,
 }
 
@@ -32,64 +32,85 @@ impl Device {
         let instance = instance.inner();
         let physical_devices = unsafe { instance.enumerate_physical_devices() }?;
 
-        let (physical_device, surface_support_details, queue_family_index) = physical_devices
-            .into_iter()
-            //only allow devices which support all required extensions
-            .filter(|physical_device| {
-                Self::check_device_extension_support(&instance, *physical_device, &device_extensions).unwrap_or(false)
-            })
-            //check for blit support
-            .filter(|physical_device| {
-                let format_properties = unsafe { instance.get_physical_device_format_properties(*physical_device, image_format) };
+        let (physical_device, surface_support_details, graphics_queue_family_index, transfer_queue_family_index) =
+            physical_devices
+                .into_iter()
+                //only allow devices which support all required extensions
+                .filter(|physical_device| {
+                    Self::check_device_extension_support(&instance, *physical_device, &device_extensions).unwrap_or(false)
+                })
+                //check for blit support
+                .filter(|physical_device| {
+                    let format_properties =
+                        unsafe { instance.get_physical_device_format_properties(*physical_device, image_format) };
 
-                format_properties
-                    .optimal_tiling_features
-                    .contains(FormatFeatureFlags::BLIT_SRC)
-                    && format_properties
-                        .linear_tiling_features
-                        .contains(FormatFeatureFlags::BLIT_DST)
-            })
-            // filter out devices without swapchain support if necessary
-            .filter_map(|physical_device| {
-                if let Some((surface, surface_instance)) = &surface_to_support {
-                    let surface_support_details =
-                        SurfaceSupportDetails::new(*surface, surface_instance, physical_device).unwrap();
-                    if surface_support_details.check_swapchain_support() {
-                        Some((physical_device, Some(RefCell::new(surface_support_details))))
+                    format_properties
+                        .optimal_tiling_features
+                        .contains(FormatFeatureFlags::BLIT_SRC)
+                        && format_properties
+                            .linear_tiling_features
+                            .contains(FormatFeatureFlags::BLIT_DST)
+                })
+                // filter out devices without swapchain support if necessary
+                .filter_map(|physical_device| {
+                    if let Some((surface, surface_instance)) = &surface_to_support {
+                        let surface_support_details =
+                            SurfaceSupportDetails::new(*surface, surface_instance, physical_device).unwrap();
+                        if surface_support_details.check_swapchain_support() {
+                            Some((physical_device, Some(RefCell::new(surface_support_details))))
+                        } else {
+                            None
+                        }
                     } else {
-                        None
+                        Some((physical_device, None))
                     }
-                } else {
-                    Some((physical_device, None))
-                }
-            })
-            //choose a suitable queue family, and filter out devices without one
-            .filter_map(|(physical_device, surface_support_details)| {
-                Some((
-                    physical_device,
-                    surface_support_details,
-                    Self::select_queue_family(&instance, physical_device)?,
-                ))
-            })
-            // try to get a discrete or at least integrated gpu
-            .max_by_key(|(physical_device, _surface_support_details, _queue_family_index)| {
-                let device_type = unsafe { instance.get_physical_device_properties(*physical_device) }.device_type;
+                })
+                //choose a suitable queue family, and filter out devices without one
+                .filter_map(|(physical_device, surface_support_details)| {
+                    Some((
+                        physical_device,
+                        surface_support_details,
+                        Self::select_graphics_queue_family(&instance, physical_device)?,
+                        Self::select_dedicated_transfer_queue(&instance, physical_device),
+                    ))
+                })
+                // try to get a discrete or at least integrated gpu
+                .max_by_key(
+                    |(physical_device, _surface_support_details, _graphics_queue_family_index, _transfer_queue_family_index)| {
+                        let device_type = unsafe { instance.get_physical_device_properties(*physical_device) }.device_type;
 
-                match device_type {
-                    vk::PhysicalDeviceType::DISCRETE_GPU => 2,
-                    vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
-                    _ => 0,
-                }
-            })
-            .ok_or(SrError::new_custom("No suitable GPU found!".to_string()))?;
-
+                        match device_type {
+                            vk::PhysicalDeviceType::DISCRETE_GPU => 2,
+                            vk::PhysicalDeviceType::INTEGRATED_GPU => 1,
+                            _ => 0,
+                        }
+                    },
+                )
+                .ok_or(SrError::new_custom("No suitable GPU found!".to_string()))?;
+        
+        
+        
         let device = {
-            let queue_priorities = vec![1.0; 1]; // TODO: use more than 1 queue?
-            let queue_create_infos = [vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(queue_family_index)
-                .queue_priorities(&queue_priorities)];
+            let graphics_priorities = [1.0];
+            let transfer_priorities = [0.5];
 
-            // enable some device features necessary for ray-tracing
+            let mut queue_create_infos = Vec::new();
+
+            queue_create_infos.push(
+                vk::DeviceQueueCreateInfo::default()
+                    .queue_family_index(graphics_queue_family_index)
+                    .queue_priorities(&graphics_priorities)
+            );
+
+            if let Some(actual_transfer_queue_family_index)  = transfer_queue_family_index  && graphics_queue_family_index != actual_transfer_queue_family_index {
+                queue_create_infos.push(
+                    vk::DeviceQueueCreateInfo::default()
+                        .queue_family_index(actual_transfer_queue_family_index)
+                        .queue_priorities(&transfer_priorities)
+                );
+            }
+
+            // enable some device features necessary for ray-tracing //TODO I may need some newer feature expecially for the semi-binding?
             let mut vk12_features = vk::PhysicalDeviceVulkan12Features::default()
                 .buffer_device_address(true) // necessary for ray-tracing
                 .timeline_semaphore(true)
@@ -148,16 +169,30 @@ impl Device {
             physical_device_memory_properties,
             physical_device_rt_pipeline_properties,
             physical_device_acceleration_structure_properties,
-            queue_family_index,
+            graphics_queue_family_index,
+            transfer_queue_family_index,
             surface_support_details,
         })
     }
 
-    fn select_queue_family(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Option<u32> {
+    fn select_graphics_queue_family(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Option<u32> {
         unsafe { instance.get_physical_device_queue_family_properties(physical_device) }
             .into_iter()
             .enumerate()
             .filter(|(_queue_family_index, queue_family_props)| queue_family_props.queue_flags.contains(vk::QueueFlags::GRAPHICS))
+            .map(|(queue_family_index, _)| queue_family_index as u32)
+            .next()
+    }
+
+    fn select_dedicated_transfer_queue(instance: &ash::Instance, physical_device: vk::PhysicalDevice) -> Option<u32> {
+        unsafe { instance.get_physical_device_queue_family_properties(physical_device) }
+            .into_iter()
+            .enumerate()
+            .filter(|(_queue_family_index, queue_family_props)| {
+                queue_family_props.queue_flags.contains(vk::QueueFlags::TRANSFER)
+                    && !queue_family_props.queue_flags.contains(vk::QueueFlags::COMPUTE)
+                    && !queue_family_props.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+            })
             .map(|(queue_family_index, _)| queue_family_index as u32)
             .next()
     }
@@ -209,8 +244,11 @@ impl Device {
     pub fn memory_properties(&self) -> &vk::PhysicalDeviceMemoryProperties {
         &self.physical_device_memory_properties
     }
-    pub fn queue_family_index(&self) -> u32 {
-        self.queue_family_index
+    pub fn graphics_queue_family_index(&self) -> u32 {
+        self.graphics_queue_family_index
+    }
+    pub fn transfer_queue_family_index(&self) -> Option<u32> {
+        self.transfer_queue_family_index
     }
     pub fn surface_support_details(&self) -> Ref<'_, SurfaceSupportDetails> {
         self.surface_support_details.as_ref().unwrap().borrow()

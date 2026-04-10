@@ -97,7 +97,7 @@ struct MeshesInfoBufferContents {
 
 pub(crate) struct ShaderDataBuffers {
     matrices_uniform_buffer: vulkan_abstraction::UniformBuffer<MatricesBufferContents>,
-    meshes_info_storage_buffer: vulkan_abstraction::ArenaIndexedBuffer<MeshesInfoBufferContents>,
+    meshes_info_storage_buffer: vulkan_abstraction::ArenaIndexedWithRingStagingBuffer<MeshesInfoBufferContents>,
     emissive_triangles_storage_buffer: vulkan_abstraction::GpuOnlyBuffer,
     textures: Vec<(vk::Sampler, vk::ImageView)>,
 
@@ -189,28 +189,20 @@ impl ShaderDataBuffers {
         Ok(())
     }
 
-    fn add_meshes_info(
+    pub fn add_meshes_info( 
         &mut self,
         blas_instances: &[vulkan_abstraction::BlasInstance],
         materials: &[vulkan_abstraction::gltf::Material],
     ) -> SrResult<()> {
-        let mut buffer_copies = Vec::with_capacity(materials.len());
-        for (blas_instance ,material) in std::iter::zip(blas_instances.iter(), materials.iter()) {
+
+        for (blas_instance, material) in std::iter::zip(blas_instances.iter(), materials.iter()) { 
             let mesh_info = MeshesInfoBufferContents {
                 vertex_buffer: blas_instance.blas.vertex_buffer().get_device_address(),
                 index_buffer: blas_instance.blas.index_buffer().get_device_address(),
                 material: Material::from(material),
             };
-            buffer_copies.push(self.meshes_info_storage_buffer.allocate_and_update(&mesh_info)?.1)
-
+            let _ = self.meshes_info_storage_buffer.allocate_and_update(&mesh_info)?;//TODO use the one for &[T]
         }
-
-        self.meshes_info_storage_buffer = vulkan_abstraction::ArenaIndexedBuffer::new_into_gpu_from_data(
-            Rc::clone(&self.core),
-            &meshes_info_storage_buffer_contents,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            "meshes info storage buffer",
-        )?;
 
         Ok(())
     }
@@ -228,7 +220,7 @@ impl ShaderDataBuffers {
             })
             .collect::<Vec<_>>();
                 
-        self.meshes_info_storage_buffer = vulkan_abstraction::ArenaIndexedBuffer::new_into_gpu_from_data(
+        self.meshes_info_storage_buffer = vulkan_abstraction::ArenaIndexedWithRingStagingBuffer::new_into_gpu_from_data(
             Rc::clone(&self.core),
             &meshes_info_storage_buffer_contents,
             vk::BufferUsageFlags::STORAGE_BUFFER,

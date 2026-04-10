@@ -102,7 +102,7 @@ impl Scene {
         ))
     }
 
-    pub fn update_gpu_data<'a>(
+    pub fn update_gpu_data<'a>( //TODO questa non va bene bisogna stare attenti agli indici per l'arena allocation 
         &self,
         core: &Rc<vulkan_abstraction::Core>,
         blases: &'a mut Vec<vulkan_abstraction::BLAS> ,
