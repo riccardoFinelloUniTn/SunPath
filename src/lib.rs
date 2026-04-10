@@ -24,6 +24,12 @@ pub const EXPOSURE: f32 = 1.0;
 
 const MAX_TLAS_INSTANCES: usize = 10_000;
 
+/// The number of concurrent frames that are processed (both by CPU and GPU).
+///
+/// Apparently 2 is the most common choice. Empirically it seems like the performance doesn't really
+/// get any better with a higher number, but it does get measurably worse with only 1.
+pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
+
 struct ImageDependentData {
     pub raytracing_cmd_buf: vulkan_abstraction::CmdBuffer,
     pub blit_cmd_buf: vulkan_abstraction::CmdBuffer,
@@ -93,7 +99,8 @@ pub struct Renderer {
     //2 images to avoid race conditions when reading/writing
     pub accumulation_images: [vulkan_abstraction::Image; 2],
     pub denoising_images: [vulkan_abstraction::Image; 2],
-    pub frame_count: u32,
+    ///this is used for temporal accumulation, there is an absolute frame counter in the core
+    pub relative_frame_count: u32,
 
     prev_view_proj: nalgebra::Matrix4<f32>, //used to calculate motion vectors
 }
@@ -112,7 +119,7 @@ impl Renderer {
         create_surface: &CreateSurfaceFn,
     ) -> SrResult<(Self, vk::SurfaceKHR)> {
         let (r, s) = Self::new_impl(image_extent, image_format, instance_exts, Some(create_surface))?;
-        return Ok((r, s.unwrap()));
+        Ok((r, s.unwrap()))
     }
 
     fn new_impl(
@@ -274,7 +281,7 @@ impl Renderer {
 
                 accumulation_images,
                 denoising_images,
-                frame_count: 0,
+                relative_frame_count: 0,
 
                 fallback_texture_image,
                 fallback_texture_sampler,
@@ -357,11 +364,11 @@ impl Renderer {
             device.end_command_buffer(setup_cmd_buf.inner())?;
 
             let fence = setup_cmd_buf.fence_mut().submit()?;
-            self.core.queue().submit_async(setup_cmd_buf.inner(), &[], &[], &[], fence)?;
+            self.core.graphics_queue().submit_async(setup_cmd_buf.inner(), &[], &[], &[], fence)?;
             setup_cmd_buf.fence_mut().wait()?;
         }
 
-        self.frame_count = 0;
+        self.relative_frame_count = 0;
 
         Ok(())
     }
@@ -496,7 +503,7 @@ impl Renderer {
 
                     // Submit to GPU and immediately wait for it to finish
                     let fence = setup_cmd_buf.fence_mut().submit()?;
-                    self.core.queue().submit_async(setup_cmd_buf.inner(), &[], &[], &[], fence)?;
+                    self.core.graphics_queue().submit_async(setup_cmd_buf.inner(), &[], &[], &[], fence)?;
 
                     // Block the CPU so we guarantee the transitions are done before rendering starts
                     setup_cmd_buf.fence_mut().wait()?;
@@ -826,7 +833,7 @@ impl Renderer {
             device.end_command_buffer(cmd_buf)?;
 
             // Submit using (*this_ptr)
-            (*this_ptr).core.queue().submit_async(
+            (*this_ptr).core.graphics_queue().submit_async(
                 img_dependent_data.raytracing_cmd_buf.inner(),
                 &[],
                 &[],
@@ -847,7 +854,7 @@ impl Renderer {
 
         unsafe {
             // Again, use (*this_ptr) because img_dependent_data is still alive here
-            (*this_ptr).core.queue().submit_async(
+            (*this_ptr).core.graphics_queue().submit_async(
                 img_dependent_data.blit_cmd_buf.inner(),
                 &wait_sems,
                 &wait_dst_stages,
@@ -886,11 +893,11 @@ impl Renderer {
         let device = self.core.device().inner();
 
         //ping pong to avoid errors when using accumulation images
-        let history_idx = (self.frame_count % 2) as usize;
-        let accum_idx = ((self.frame_count + 1) % 2) as usize;
+        let history_idx = (self.relative_frame_count % 2) as usize;
+        let accum_idx = ((self.relative_frame_count + 1) % 2) as usize;
 
         // Use GENERAL for everything to rule out layout mismatches
-        let (old_layout, src_stage, src_access) = if self.frame_count == 0 {
+        let (old_layout, src_stage, src_access) = if self.relative_frame_count == 0 {
             (
                 vk::ImageLayout::UNDEFINED,
                 vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -906,12 +913,13 @@ impl Renderer {
 
         // Initializing push constant values
         let push_constants = vulkan_abstraction::RaytracingPushConstant {
-            frame_count: self.frame_count,
+            frame_count: self.relative_frame_count,
             use_srgb: self.image_format == vk::Format::R8G8B8A8_SRGB,
             _padding: [0; 3],
         };
 
-        self.frame_count += 1;
+        self.relative_frame_count += 1;
+        *self.core.absolute_frame_count.borrow_mut() += 1 ;
         unsafe {
             let subresource_range = vk::ImageSubresourceRange::default()
                 .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -941,7 +949,7 @@ impl Renderer {
                 vk::AccessFlags::SHADER_WRITE,
             );
 
-            let (hist_old, hist_src) = if self.frame_count == 1 {
+            let (hist_old, hist_src) = if self.relative_frame_count == 1 {
                 (vk::ImageLayout::UNDEFINED, vk::AccessFlags::empty())
             } else {
                 (vk::ImageLayout::GENERAL, vk::AccessFlags::SHADER_WRITE)
@@ -956,7 +964,7 @@ impl Renderer {
                 vk::AccessFlags::SHADER_READ,
             );
 
-            let (accum_old, accum_src) = if self.frame_count == 1 {
+            let (accum_old, accum_src) = if self.relative_frame_count == 1 {
                 (vk::ImageLayout::UNDEFINED, vk::AccessFlags::empty())
             } else {
                 (vk::ImageLayout::GENERAL, vk::AccessFlags::SHADER_READ)
@@ -974,7 +982,7 @@ impl Renderer {
             device.cmd_pipeline_barrier(
                 cmd_buf,
                 // Frame 1: Wait for nothing. Frame 2+: Wait for previous Ray Tracing.
-                if self.frame_count == 1 {
+                if self.relative_frame_count == 1 {
                     vk::PipelineStageFlags::TOP_OF_PIPE
                 } else {
                     vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR
@@ -1036,8 +1044,8 @@ impl Renderer {
     ) -> SrResult<()> {
         let device = self.core.device().inner();
 
-        let history_idx = (self.frame_count % 2) as usize;
-        let accum_idx = ((self.frame_count + 1) % 2) as usize;
+        let history_idx = (self.relative_frame_count % 2) as usize;
+        let accum_idx = ((self.relative_frame_count + 1) % 2) as usize;
 
         // 1. Prepare inputs (RT Image and Motion Vectors)
         let rt_barrier = vk::ImageMemoryBarrier::default()
@@ -1084,13 +1092,13 @@ impl Renderer {
                 layer_count: 1,
             });
 
-        let history_old_layout = if self.frame_count == 0 {
+        let history_old_layout = if self.relative_frame_count == 0 {
             vk::ImageLayout::UNDEFINED
         } else {
             vk::ImageLayout::GENERAL
         };
 
-        let history_src_access = if self.frame_count == 0 {
+        let history_src_access = if self.relative_frame_count == 0 {
             vk::AccessFlags::empty()
         } else {
             vk::AccessFlags::SHADER_WRITE
@@ -1142,7 +1150,7 @@ impl Renderer {
                 self.temporal_accumulation_pipeline.layout(),
                 vk::ShaderStageFlags::COMPUTE,
                 0,
-                &self.frame_count.to_ne_bytes(),
+                &self.relative_frame_count.to_ne_bytes(),
             );
 
             let group_x = (width + 15) / 16;
@@ -1170,7 +1178,7 @@ impl Renderer {
         let total_passes = DENOISE_PASSES;
 
         // Determine which accumulation image is the "latest" history to read from
-        let history_idx = (self.frame_count % 2) as usize;
+        let history_idx = (self.relative_frame_count % 2) as usize;
 
         for pass_index in 0..total_passes {
             // Step width follows a-trous wavelet pattern: 1, 2, 4, 8...
@@ -1231,7 +1239,7 @@ impl Renderer {
                 });
 
             let push_constants = vulkan_abstraction::DenoisePushConstant {
-                frame_count: self.frame_count,
+                frame_count: self.relative_frame_count,
                 step_width,
             };
 
@@ -1570,7 +1578,7 @@ const IS_DEBUG_BUILD: bool = cfg!(debug_assertions);
 
 impl Drop for Renderer {
     fn drop(&mut self) {
-        match self.core().queue().wait_idle() {
+        match self.core().graphics_queue().wait_idle() {
             Ok(()) => {}
             Err(e) => match e.get_source() {
                 ErrorSource::Vulkan(e) => {
