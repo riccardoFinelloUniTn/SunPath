@@ -49,6 +49,8 @@ struct ImageDependentData {
     #[allow(unused)]
     motion_vector_image: vulkan_abstraction::Image,
 
+    pub raytracing_finished_semaphore: vulkan_abstraction::Semaphore,
+
     #[allow(unused)]
     pub raytracing_descriptor_sets: vulkan_abstraction::RaytracingDescriptorSets,
     #[allow(unused)]
@@ -70,7 +72,6 @@ pub struct Renderer {
     blases: Vec<vulkan_abstraction::BLAS>,
     tlas: vulkan_abstraction::TLAS,
 
-    pending_transfer_semaphore : Vec<vk::Semaphore>,
 
     is_tlas_dirty : bool,
 
@@ -149,7 +150,9 @@ impl Renderer {
         let mut instances_buffer = vulkan_abstraction::StagingBuffer::new(
             Rc::clone(&core),
             MAX_TLAS_INSTANCES,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::BufferUsageFlags::STORAGE_BUFFER |
+                vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS |
+                vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
             "Cpu side instances of blases"
         )?; //TODO const value a caso
 
@@ -254,6 +257,7 @@ impl Renderer {
             vk::SamplerMipmapMode::LINEAR,
         )?;
 
+
         Ok((
             Self {
                 image_dependant_data,
@@ -268,7 +272,6 @@ impl Renderer {
                 blases,
                 tlas,
 
-                pending_transfer_semaphore: vec![],
                 is_tlas_dirty: false,
 
                 instances_buffer,
@@ -582,6 +585,8 @@ impl Renderer {
                 unsafe { self.core.device().inner().end_command_buffer(blit_cmd_buf.inner()) }?;
             }
 
+            let raytracing_finished_semaphore =  vulkan_abstraction::Semaphore::new(self.core.clone())?;
+
             self.image_dependant_data.insert(
                 *post_blit_image,
                 ImageDependentData {
@@ -597,6 +602,7 @@ impl Renderer {
                     temporal_accumulation_descriptor_sets,
                     denoise_descriptor_sets,
                     postprocess_descriptor_sets,
+                    raytracing_finished_semaphore,
                 },
             );
         }
@@ -693,9 +699,22 @@ impl Renderer {
         let postprocess_descriptor_sets_ptr =
             &img_dependent_data.postprocess_descriptor_sets as *const vulkan_abstraction::PostProcessDescriptorSets;
 
+
+
         unsafe {
             // Use (*this_ptr).core because 'self.core' is locked by 'img_dependent_data'
             let device = (*this_ptr).core.device().inner();
+
+
+
+            // Supponiamo che tu abbia salvato il semaforo restituito dalla transfer queue
+            // in un campo opzionale `self.pending_transfer_semaphore`
+            let wait_semaphores = (*this_ptr).core.transfer_semaphores_mut().drain(..).collect::<Vec<_>>();
+                // IMPORTANTE: Diciamo alla GPU di aspettare PRIMA di lanciare i Ray Tracing Shader
+                // Se la TLAS viene aggiornata in questo cmd buffer, aggiungi anche ACCELERATION_STRUCTURE_BUILD_KHR
+            let wait_stages = wait_semaphores.iter().map(|semaphore| {
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR | vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+            }).collect::<Vec<_>>();
 
 
             let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -745,7 +764,7 @@ impl Renderer {
                     .old_layout(vk::ImageLayout::GENERAL)
                     .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image(img_dependent_data.diffuse_image.inner())
-                    .subresource_range(*img_dependent_data.normal_image.image_subresource_range()),
+                    .subresource_range(*img_dependent_data.diffuse_image.image_subresource_range()),
             ];
 
             device.cmd_pipeline_barrier(
@@ -841,15 +860,15 @@ impl Renderer {
             // Submit using (*this_ptr)
             (*this_ptr).core.graphics_queue().submit_async(
                 img_dependent_data.raytracing_cmd_buf.inner(),
-                &[],
-                &[],
-                &[],
+                &wait_semaphores,
+                &wait_stages,
+                &[img_dependent_data.raytracing_finished_semaphore.inner()],
                 img_dependent_data.raytracing_cmd_buf.fence_mut().submit()?,
             )?;
         }
 
         // Blitting
-        let (wait_sems, wait_dst_stages) = ([wait_sem], [vk::PipelineStageFlags::ALL_GRAPHICS]);
+        let (wait_sems, wait_dst_stages) = ([wait_sem , img_dependent_data.raytracing_finished_semaphore.inner()], [vk::PipelineStageFlags::ALL_GRAPHICS ,vk::PipelineStageFlags::TRANSFER]);
         let (wait_sems, wait_dst_stages) = if wait_sem == vk::Semaphore::null() {
             ([].as_slice(), [].as_slice())
         } else {

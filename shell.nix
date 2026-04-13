@@ -54,4 +54,5 @@ pkgs.mkShell {
   # 2. Tell the linker and runtime exactly where to find Vulkan and Windowing libraries
   LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (bpy-libs ++ x11Libs ++ waylandLibs ++ vulkanLibs);
 
+  VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
 }
