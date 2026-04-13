@@ -12,6 +12,7 @@ use std::rc::Rc;
 use crate::vulkan_abstraction;
 use crate::{CreateSurfaceFn, error::*};
 use ash::{khr, vk};
+use ash::vk::Semaphore;
 
 #[rustfmt::skip]
 #[allow(unused)]
@@ -27,6 +28,7 @@ pub struct Core { //TODO core is completely single thread
     graphics_cmd_pool: vulkan_abstraction::CmdPool,
     transfer_cmd_pool: vulkan_abstraction::CmdPool,
 
+    transfer_semaphores: RefCell<Vec<vk::Semaphore>>,
 
     allocator: RefCell<Allocator>,
 
@@ -126,7 +128,8 @@ impl Core {
                 graphics_queue: RefCell::new(graphics_queue),
                 transfer_queue: RefCell::new(dedicated_transfer_queue),
                 graphics_cmd_pool,
-                transfer_cmd_pool
+                transfer_cmd_pool,
+                transfer_semaphores: RefCell::new(vec![]),
             },
             surface_support.map(|(s, _)| s),
         ))
@@ -169,6 +172,13 @@ impl Core {
     }
     pub fn allocator_mut(&self) -> RefMut<'_, Allocator> {
         self.allocator.borrow_mut()
+    }
+
+    pub fn transfer_semaphores(&self) -> Ref<'_, Vec<Semaphore>> {
+        self.transfer_semaphores.borrow()
+    }
+    pub fn transfer_semaphores_mut(&self) -> RefMut<'_, Vec<Semaphore>> {
+        self.transfer_semaphores.borrow_mut()
     }
     pub fn graphics_cmd_pool(&self) -> &vulkan_abstraction::CmdPool {
         &self.graphics_cmd_pool

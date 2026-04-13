@@ -12,7 +12,7 @@ use crate::{error::*, vulkan_abstraction, MAX_FRAMES_IN_FLIGHT};
 use ash::vk;
 use ash::vk::{BufferUsageFlags, DeviceAddress, DeviceSize, Handle};
 use std::rc::Rc;
-use log::error;
+use log::{error, info};
 //TODO divide into a trait gpuonly and hostmemoery accessible and then do custom new functions with custom flags by leveraging strong typing
 
 pub fn get_memory_type_index(
@@ -455,9 +455,10 @@ impl GpuOnlyBuffer {
             byte_size,
             1,
             gpu_allocator::MemoryLocation::GpuOnly,
-            usage | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC,
+            usage | vk::BufferUsageFlags::TRANSFER_DST ,
             name,
         )?;
+        log::debug!("New Gpu Buffer with these usage flags {usage:?}");
         Ok(Self { raw })
     }
 
@@ -474,7 +475,7 @@ impl GpuOnlyBuffer {
             byte_size,
             alignment,
             gpu_allocator::MemoryLocation::GpuOnly,
-            usage | vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::TRANSFER_SRC,
+            usage | vk::BufferUsageFlags::TRANSFER_DST ,
             name,
         )?;
         Ok(Self { raw })
