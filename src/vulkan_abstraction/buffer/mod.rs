@@ -1,6 +1,7 @@
 pub mod index_buffer;
 pub mod vertex_buffer;
 
+use std::collections::VecDeque;
 //why use and not just mod?
 pub use index_buffer::*;
 use std::marker::PhantomData;
@@ -512,6 +513,9 @@ pub struct ArenaIndexedWithRingStagingBuffer<T> {
     gpu_only: GpuOnlyBuffer,
     capacity: usize,
     free_slots: Vec<usize>, // A simple LIFO stack of available indices
+    ///these are the freed slot of this frame,which will be available the next one
+    pending_free_slots: VecDeque<(u64, usize)>,
+
 }
 
 
@@ -551,6 +555,7 @@ impl<T> Buffer for ArenaIndexedWithRingStagingBuffer<T> {
             gpu_only: GpuOnlyBuffer::new_null(core),
             capacity: 0,
             free_slots: vec![],
+            pending_free_slots: Default::default(),
         }
     }
 }
@@ -569,12 +574,13 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
         let mut gpu_buffer = GpuOnlyBuffer::new::<T>(core.clone(), data.len(), buffer_usage_flags  | vk::BufferUsageFlags::TRANSFER_DST, name )?;
 
 
-            staging_buffer.clone_into_gpu_only_buffer(&mut gpu_buffer)?;
+            staging_buffer.clone_section_into_gpu_only_buffer(0, data.len() as DeviceSize, &mut gpu_buffer)?;
         Ok(Self{
             staging:staging_buffer,
             gpu_only: gpu_buffer,
             capacity,
             free_slots: vec![],
+            pending_free_slots: Default::default(),
         })
     }
 
@@ -598,8 +604,27 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
             gpu_only,
             capacity,
             free_slots,
+            pending_free_slots: Default::default(),
         })
     }
+
+    /// Frees an index so it can be reused by future allocations.
+    pub fn free_index(&mut self, index: usize) {
+       let current_frame = *self.raw().core.absolute_frame_count.borrow() as u64;
+        self.pending_free_slots.push_back((current_frame, index));
+    }
+
+    pub fn process_pending_frees(&mut self, current_frame: u64) {
+        while let Some(&(frame_freed, index)) = self.pending_free_slots.front() {
+            if current_frame >= frame_freed + MAX_FRAMES_IN_FLIGHT as u64 {
+                self.free_slots.push(index);
+                self.pending_free_slots.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
 
     pub fn inner_staging(&self) -> vk::Buffer {
         self.staging.inner()
@@ -632,7 +657,6 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
     /// Allocates a slot for new data. Returns the assigned index and the BufferCopy region
     /// that needs to be submitted to a CommandBuffer for GPU synchronization.
     pub fn allocate_and_update(&mut self, data: &T  ) -> SrResult<usize> { //TODO this does not actually allocate or delegate correctly yet and with a vector of data
-        // 1. Alloca un indice (slot logico nel GPU buffer)
         let index = self
             .free_slots
             .pop()
@@ -671,15 +695,9 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
 
         unsafe { device.free_command_buffers(self.raw().core.graphics_cmd_pool().inner(), &[cmd_buf]) };
 
-        //I want to make sure the frame doesn't change while doing this
 
-        Ok((index))
+        Ok(index)
     }
 
-    /// Frees an index so it can be reused by future allocations.
-    pub fn free_index(&mut self, index: usize) {
-        if index < self.capacity {
-            self.free_slots.push(index);
-        }
-    }
+
 }
