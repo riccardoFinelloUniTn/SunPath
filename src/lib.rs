@@ -30,6 +30,9 @@ const MAX_TLAS_INSTANCES: usize = 10_000;
 /// get any better with a higher number, but it does get measurably worse with only 1.
 pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
+
+//TODO add a list of callbacks to call at the end of frames for cleanup or at start for setup
+//TODO deferred deallocation for buffers and acceleration structures
 struct ImageDependentData {
     pub raytracing_cmd_buf: vulkan_abstraction::CmdBuffer,
     pub blit_cmd_buf: vulkan_abstraction::CmdBuffer,
