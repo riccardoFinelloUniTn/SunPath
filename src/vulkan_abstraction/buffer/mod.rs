@@ -12,6 +12,7 @@ use crate::{error::*, vulkan_abstraction, MAX_FRAMES_IN_FLIGHT};
 use ash::vk;
 use ash::vk::{BufferUsageFlags, DeviceAddress, DeviceSize, Handle};
 use std::rc::Rc;
+use log::error;
 //TODO divide into a trait gpuonly and hostmemoery accessible and then do custom new functions with custom flags by leveraging strong typing
 
 pub fn get_memory_type_index(
@@ -657,6 +658,7 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
     /// Allocates a slot for new data. Returns the assigned index and the BufferCopy region
     /// that needs to be submitted to a CommandBuffer for GPU synchronization.
     pub fn allocate_and_update(&mut self, data: &T  ) -> SrResult<usize> { //TODO this does not actually allocate or delegate correctly yet and with a vector of data
+
         let index = self
             .free_slots
             .pop()
@@ -691,7 +693,7 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
 
         unsafe { device.end_command_buffer(cmd_buf) }?;
 
-        self.raw().core.graphics_queue().submit_sync(cmd_buf)?;
+        self.raw().core.transfer_queue().submit_sync(cmd_buf)?;
 
         unsafe { device.free_command_buffers(self.raw().core.graphics_cmd_pool().inner(), &[cmd_buf]) };
 

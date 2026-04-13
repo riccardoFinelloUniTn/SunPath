@@ -70,6 +70,8 @@ pub struct Renderer {
     blases: Vec<vulkan_abstraction::BLAS>,
     tlas: vulkan_abstraction::TLAS,
 
+    pending_transfer_semaphore : Vec<vk::Semaphore>,
+
     is_tlas_dirty : bool,
 
     instances_buffer: vulkan_abstraction::StagingBuffer<vk::AccelerationStructureInstanceKHR>,
@@ -266,6 +268,7 @@ impl Renderer {
                 blases,
                 tlas,
 
+                pending_transfer_semaphore: vec![],
                 is_tlas_dirty: false,
 
                 instances_buffer,
