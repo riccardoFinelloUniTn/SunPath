@@ -21,7 +21,8 @@ impl RaytracingDescriptorSetLayout {
     pub const DIFFUSE_BINDING: u32 = 7;
     pub const MOTION_VECTOR_BINDING: u32 = 8;
     pub const EMISSIVE_TRIANGLES_BINDING: u32 = 9;
-    pub const NUMBER_OF_BINDINGS: usize = 10;
+    pub const BLUE_NOISE_BINDING: u32 = 10;
+    pub const NUMBER_OF_BINDINGS: usize = 11;
 
 
     pub const NUMBER_OF_SAMPLERS: u32 = vulkan_abstraction::ShaderDataBuffers::NUMBER_OF_SAMPLERS as u32;
@@ -89,6 +90,11 @@ impl RaytracingDescriptorSetLayout {
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::BLUE_NOISE_BINDING)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
         ];
 
         let descriptor_set_layout_create_info =
@@ -131,11 +137,13 @@ impl RaytracingDescriptorSets {
         core: Rc<vulkan_abstraction::Core>,
         descriptor_set_layout: &RaytracingDescriptorSetLayout,
         tlas: &TLAS,
-        output_image: &vulkan_abstraction::Image,       // Changed from ImageView to Image
+        output_image: &vulkan_abstraction::Image,
         depth_image: &vulkan_abstraction::Image,
         normal_image: &vulkan_abstraction::Image,
         diffuse_image: &vulkan_abstraction::Image,
         motion_vector_image: &vulkan_abstraction::Image,
+        blue_noise_image: &vulkan_abstraction::Image,
+        blue_noise_sampler: vk::Sampler,
         shader_data: &vulkan_abstraction::ShaderDataBuffers,
     ) -> SrResult<Self> {
         let device = core.device().inner();
@@ -154,7 +162,7 @@ impl RaytracingDescriptorSets {
                 .descriptor_count(2),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS),
+                .descriptor_count(RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS + 1),       //The +1 is for the blue noise texture
         ];
 
         let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo::default()
@@ -308,6 +316,19 @@ impl RaytracingDescriptorSets {
                 .image_info(&descriptor_sampler_infos)
                 .dst_set(descriptor_sets[0])
                 .dst_binding(RaytracingDescriptorSetLayout::SAMPLERS_BINDING),
+        );
+
+        let blue_noise_info = [vk::DescriptorImageInfo::default()
+            .image_view(blue_noise_image.image_view())
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .sampler(blue_noise_sampler)];
+
+        push_write(
+            vk::WriteDescriptorSet::default()
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(&blue_noise_info)
+                .dst_set(descriptor_sets[0])
+                .dst_binding(RaytracingDescriptorSetLayout::BLUE_NOISE_BINDING),
         );
 
         unsafe { device.update_descriptor_sets(&descriptor_writes, &[]) };

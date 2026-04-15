@@ -18,7 +18,7 @@ use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::Post
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
 use crate::vulkan_abstraction::{BlasInstance, BlasMetaData, BlasState, Buffer, DenoiseDescriptorSetLayout, DenoisePass, Dynamic, PostProcessDescriptorSets, PostprocessPass, TemporalPass};
 
-pub const DENOISE_PASSES: u32 = 5;
+pub const DENOISE_PASSES: u32 = 4;
 
 pub const EXPOSURE: f32 = 1.0;
 
@@ -99,6 +99,9 @@ pub struct Renderer {
     fallback_texture_image: vulkan_abstraction::Image,
     fallback_texture_sampler: vulkan_abstraction::Sampler,
     default_sampler: vulkan_abstraction::Sampler,
+
+    blue_noise_image: vulkan_abstraction::Image,
+    blue_noise_sampler: vulkan_abstraction::Sampler,
 
     core: Rc<vulkan_abstraction::Core>,
 
@@ -211,6 +214,38 @@ impl Renderer {
 
         let denoising_images = [create_accum_image("Denoise_Ping")?, create_accum_image("Denoise_Pong")?];
 
+        let blue_noise_bytes = include_bytes!("../src/util_files/noise.png");
+        let blue_noise_img = image::load_from_memory(blue_noise_bytes).unwrap().to_rgba8();
+        let (noise_width, noise_height) = blue_noise_img.dimensions();
+        let blue_noise_data = blue_noise_img.into_raw();
+
+
+
+        let blue_noise_image = vulkan_abstraction::Image::new_from_data(
+            Rc::clone(&core),
+            blue_noise_data,
+            vk::Extent3D {
+                width: noise_width,
+                height: noise_height,
+                depth: 1,
+            },
+            vk::Format::R8G8B8A8_UNORM,
+            vk::ImageTiling::OPTIMAL,
+            gpu_allocator::MemoryLocation::GpuOnly,
+            vk::ImageUsageFlags::SAMPLED,
+            "blue noise texture",
+        )?;
+
+        let blue_noise_sampler = vulkan_abstraction::Sampler::new(
+            Rc::clone(&core),
+            vk::Filter::NEAREST,
+            vk::Filter::NEAREST,
+            vk::SamplerAddressMode::REPEAT,
+            vk::SamplerAddressMode::REPEAT,
+            vk::SamplerAddressMode::REPEAT,
+            vk::SamplerMipmapMode::NEAREST,
+        )?;
+
         let fallback_texture_image = {
             const RESOLUTION: u32 = 64;
             let image_data = utils::iterate_image_extent(RESOLUTION, RESOLUTION)
@@ -291,6 +326,9 @@ impl Renderer {
                 accumulation_images,
                 denoising_images,
                 relative_frame_count: 0,
+
+                blue_noise_image,
+                blue_noise_sampler,
 
                 fallback_texture_image,
                 fallback_texture_sampler,
@@ -528,6 +566,8 @@ impl Renderer {
                 &normal_image,          // G-Buffer Normals
                 &diffuse_image,         // G-Buffer Diffuse
                 &motion_vector_image,   // G-Buffer Motion
+                &self.blue_noise_image,
+                self.blue_noise_sampler.inner(),
                 &self.shader_data_buffers,
             )?;
 

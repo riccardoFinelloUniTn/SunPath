@@ -58,7 +58,8 @@ impl App {
         let (mut renderer, surface) =
             sunray::Renderer::new_with_surface(size, vk::Format::R8G8B8A8_SRGB, instance_exts, &create_surface)?;
 
-        renderer.load_gltf("examples/assets/ReflectionRoom2.glb")?;
+        // /heavy_models/Light_Tests
+        renderer.load_gltf("examples/assets/Room3.glb")?;
 
         //take ownership of the surface
         let surface = surface::Surface::new(renderer.core().entry(), renderer.core().instance(), surface);
