@@ -108,7 +108,7 @@ impl ShaderDataBuffers {
     pub const NUMBER_OF_SAMPLERS: usize = 1024;
 
     pub fn new_empty(core: Rc<vulkan_abstraction::Core>) -> SrResult<Self> {
-        let matrices_uniform_buffer = vulkan_abstraction::UniformBuffer::new(Rc::clone(&core), 1)?;
+        let matrices_uniform_buffer = vulkan_abstraction::UniformBuffer::new(Rc::clone(&core), 1 as vk::DeviceSize)?;
 
         Ok(Self {
             matrices_uniform_buffer,
@@ -227,7 +227,6 @@ impl ShaderDataBuffers {
                 self.meshes_info_storage_buffer.inner(),
                 &copy_buffers,
             );
-
             // 4. Memory Barrier (Availability -> Visibility)
             // We must ensure the TRANSFER writes are visible before shaders try to read them.
             let buffer_barrier = vk::BufferMemoryBarrier2::default()

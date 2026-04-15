@@ -280,9 +280,9 @@ pub struct StagingBuffer<T> {
 impl_buffer_trait!(StagingBuffer<T>);
 
 impl<T> StagingBuffer<T> {
-    pub fn new_temp(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self> {
+    pub fn new_temp(core: Rc<vulkan_abstraction::Core>, len: vk::DeviceSize) -> SrResult<Self> {
         //TODO this gets used for new from data and it has no flags
-        let byte_size = (len * std::mem::size_of::<T>()) as vk::DeviceSize;
+        let byte_size = (len * std::mem::size_of::<T>() as vk::DeviceSize) as vk::DeviceSize;
         let raw = RawBuffer::new_aligned(
             core,
             byte_size,
@@ -299,11 +299,11 @@ impl<T> StagingBuffer<T> {
 
     pub fn new(
         core: Rc<vulkan_abstraction::Core>,
-        len: usize,
+        len: vk::DeviceSize,
         buffer_usage_flags: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
-        let byte_size = (len * std::mem::size_of::<T>()) as vk::DeviceSize;
+        let byte_size = len * std::mem::size_of::<T>() as vk::DeviceSize;
         let raw = RawBuffer::new_aligned(
             core,
             byte_size,
@@ -326,7 +326,7 @@ impl<T> StagingBuffer<T> {
             return Ok(Self::new_null(core));
         }
 
-        let mut staging_buffer = Self::new_temp(core, data.len())?;
+        let mut staging_buffer = Self::new_temp(core, data.len() as vk::DeviceSize)?;
 
         let mapped_memory = staging_buffer.map_mut()?;
         mapped_memory[0..data.len()].copy_from_slice(data);
@@ -347,7 +347,7 @@ impl<T> StagingBuffer<T> {
             return Ok(Self::new_null(core));
         }
 
-        let mut staging_buffer = Self::new(core, data.len(), buffer_usage_flags, name)?;
+        let mut staging_buffer = Self::new(core, data.len() as vk::DeviceSize, buffer_usage_flags, name)?;
 
         let mapped_memory = staging_buffer.map_mut()?;
         mapped_memory[0..data.len()].copy_from_slice(data);
@@ -358,14 +358,14 @@ impl<T> StagingBuffer<T> {
     pub fn new_from_data_with_custom_length(
         core: Rc<vulkan_abstraction::Core>,
         data: &[T],
-        len: usize,
+        len: vk::DeviceSize,
         buffer_usage_flags: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self>
     where
         T: Copy,
     {
-        if len < data.len() {
+        if len < (data.len() as vk::DeviceSize) {
             return Err(SrError::new_custom(format!(
                 "attempted to create an insufficiently sized buffer, src : {} bytes , dst : {len} bytes",
                 data.len()
@@ -381,7 +381,7 @@ impl<T> StagingBuffer<T> {
     }
 
     pub fn new_cloned_to_gpu_only_buffer(&self, usage: vk::BufferUsageFlags, name: &'static str) -> SrResult<GpuOnlyBuffer> {
-        let mut dst = GpuOnlyBuffer::new::<T>(self.raw.core.clone(), self.len(), usage, name)?;
+        let mut dst = GpuOnlyBuffer::new::<T>(self.raw.core.clone(), self.len() as vk::DeviceSize, usage, name)?;
         self.clone_section_into_gpu_only_buffer(0, self.byte_size(), &mut dst)?;
         Ok(dst)
     }
@@ -488,8 +488,8 @@ pub struct UniformBuffer<T> {
 impl_buffer_trait!(UniformBuffer<T>);
 
 impl<T> UniformBuffer<T> {
-    pub fn new(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self> {
-        let byte_size = (len * std::mem::size_of::<T>()) as vk::DeviceSize;
+    pub fn new(core: Rc<vulkan_abstraction::Core>, len: vk::DeviceSize) -> SrResult<Self> {
+        let byte_size = len * std::mem::size_of::<T>() as vk::DeviceSize;
         let raw = RawBuffer::new_aligned(
             core,
             byte_size,
@@ -530,12 +530,12 @@ impl_buffer_trait!(GpuOnlyBuffer);
 impl GpuOnlyBuffer {
     pub fn new<T>(
         core: Rc<vulkan_abstraction::Core>,
-        len: usize,
+        len: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
 
-        let byte_size = (len * std::mem::size_of::<T>()) as vk::DeviceSize;
+        let byte_size = len * std::mem::size_of::<T>() as vk::DeviceSize;
         let raw = RawBuffer::new_aligned(
             core,
             byte_size,
@@ -550,12 +550,12 @@ impl GpuOnlyBuffer {
 
     pub fn new_aligned<T>(
         core: Rc<vulkan_abstraction::Core>,
-        len: usize,
+        len: vk::DeviceSize,
         alignment: u64,
         usage: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
-        let byte_size = (len * std::mem::size_of::<T>()) as vk::DeviceSize;
+        let byte_size = len * std::mem::size_of::<T>() as vk::DeviceSize;
         let raw = RawBuffer::new_aligned(
             core,
             byte_size,
@@ -663,12 +663,12 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
         if capacity == 0 {
             return Ok(Self::new_null(core));
         }
-        let byte_length = (data.len() * std::mem::size_of::<T>()) ;
+        let byte_length = (data.len() * std::mem::size_of::<T>()) as vk::DeviceSize;
 
         let staging_buffer = StagingBuffer::new_from_data_with_custom_length(
             Rc::clone(&core),
             data,
-            byte_length * MAX_FRAMES_IN_FLIGHT,
+            byte_length * MAX_FRAMES_IN_FLIGHT as vk::DeviceSize,
             buffer_usage_flags,
             name,
         )?;
@@ -683,7 +683,7 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
             name,
         )?;
 
-        staging_buffer.clone_section_into_gpu_only_buffer(0, byte_length as DeviceSize, &mut gpu_buffer)?;
+        staging_buffer.clone_section_into_gpu_only_buffer(0, byte_length, &mut gpu_buffer)?;
         Ok(Self {
             staging: staging_buffer,
             gpu_only: gpu_buffer,
@@ -694,6 +694,7 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
     }
 
     //TODO handle reqeust to grow and compact near indexes in a ranges
+    ///Capacity is the number of elements not the length of the buffer
     pub fn new(
         core: Rc<vulkan_abstraction::Core>,
         capacity: usize,
@@ -702,11 +703,11 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
     ) -> SrResult<Self> {
         let staging = StagingBuffer::new(
             core.clone(),
-            capacity * MAX_FRAMES_IN_FLIGHT,
+            (capacity * std::mem::size_of::<T>() * MAX_FRAMES_IN_FLIGHT) as vk::DeviceSize,
             usage | vk::BufferUsageFlags::TRANSFER_SRC ,
             name,
         )?; //TODO flags
-        let gpu_only = GpuOnlyBuffer::new::<T>(core.clone(), capacity, usage| vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST, name)?;
+        let gpu_only = GpuOnlyBuffer::new::<T>(core.clone(), (capacity * std::mem::size_of::<T>() ) as vk::DeviceSize, usage| vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST, name)?;
 
         // Populate the free list with all available indices
         let free_slots = (0..capacity).rev().collect();

@@ -31,7 +31,7 @@ impl VertexBuffer {
     }
 
     //build a vertex buffer with flags for usage in a blas
-    pub fn new_for_blas<T>(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self> {
+    pub fn new_for_blas<T>(core: Rc<vulkan_abstraction::Core>, len: vk::DeviceSize) -> SrResult<Self> {
         let usage_flags = vk::BufferUsageFlags::TRANSFER_DST
             | vk::BufferUsageFlags::VERTEX_BUFFER
             | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
@@ -44,7 +44,7 @@ impl VertexBuffer {
                 usage_flags,
                 "vertex buffer for BLAS usage",
             )?,
-            len,
+            len: len as usize,
             stride: std::mem::size_of::<T>(),
         })
     }
