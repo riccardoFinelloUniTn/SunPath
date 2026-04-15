@@ -4,7 +4,7 @@ use ash::vk;
 use nalgebra as na;
 
 use crate::{CameraMatrices, error::SrResult, vulkan_abstraction};
-use crate::vulkan_abstraction::HostAccessibleBuffer;
+use crate::vulkan_abstraction::Buffer;
 
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
@@ -97,8 +97,8 @@ struct MeshesInfoBufferContents {
 
 pub(crate) struct ShaderDataBuffers {
     matrices_uniform_buffer: vulkan_abstraction::UniformBuffer<MatricesBufferContents>,
-    meshes_info_storage_buffer: vulkan_abstraction::GpuOnlyBuffer<MeshesInfoBufferContents>,
-    emissive_triangles_storage_buffer: vulkan_abstraction::GpuOnlyBuffer<vulkan_abstraction::gltf::EmissiveTriangle>,
+    meshes_info_storage_buffer: vulkan_abstraction::ArenaIndexedWithRingStagingBuffer<MeshesInfoBufferContents>,
+    emissive_triangles_storage_buffer: vulkan_abstraction::GpuOnlyBuffer,
     textures: Vec<(vk::Sampler, vk::ImageView)>,
 
     core: Rc<vulkan_abstraction::Core>,
@@ -108,12 +108,12 @@ impl ShaderDataBuffers {
     pub const NUMBER_OF_SAMPLERS: usize = 1024;
 
     pub fn new_empty(core: Rc<vulkan_abstraction::Core>) -> SrResult<Self> {
-        let matrices_uniform_buffer = vulkan_abstraction::UniformBuffer::new(Rc::clone(&core), 1)?;
+        let matrices_uniform_buffer = vulkan_abstraction::UniformBuffer::new(Rc::clone(&core), 1 as vk::DeviceSize)?;
 
         Ok(Self {
             matrices_uniform_buffer,
-            meshes_info_storage_buffer: vulkan_abstraction::GpuOnlyBuffer::new_null(Rc::clone(&core)),
-            emissive_triangles_storage_buffer: vulkan_abstraction::GpuOnlyBuffer::new_null(Rc::clone(&core)),
+            meshes_info_storage_buffer: vulkan_abstraction::Buffer::new_null(Rc::clone(&core)),
+            emissive_triangles_storage_buffer: vulkan_abstraction::Buffer::new_null(Rc::clone(&core)),
             textures: Vec::new(),
             core,
         })
@@ -129,7 +129,7 @@ impl ShaderDataBuffers {
         }: CameraMatrices,
     ) -> SrResult<()> {
 
-        let mem = self.matrices_uniform_buffer.map_mut()?;
+        let mem = self.matrices_uniform_buffer.raw_mut().map_mut::<MatricesBufferContents>()?;
         mem[0] = MatricesBufferContents {
             view_inverse,
             proj_inverse,
@@ -140,9 +140,9 @@ impl ShaderDataBuffers {
         Ok(())
     }
     //TODO fix reallocation on update 
-    pub fn update<'a, V, I>(
+    pub fn update(
         &mut self,
-        blas_instances: &[vulkan_abstraction::BlasInstance<'a, V, I>],
+        blas_instances: &[vulkan_abstraction::BlasInstance],
         materials: &[vulkan_abstraction::gltf::Material],
         images: &[vulkan_abstraction::Image],
         samplers: &[vulkan_abstraction::Sampler],
@@ -151,7 +151,7 @@ impl ShaderDataBuffers {
         default_sampler: &vulkan_abstraction::Sampler,
         emissive_triangles: &[vulkan_abstraction::gltf::EmissiveTriangle],
     ) -> SrResult<()> {
-        self.set_meshes_info(blas_instances, materials)?; //reallocation 
+        self.create_meshes_info(blas_instances, materials)?;
         self.set_textures(images, samplers, textures, fallback, default_sampler);
         self.set_emissive_triangles(emissive_triangles)?;
 
@@ -175,23 +175,92 @@ impl ShaderDataBuffers {
             self.emissive_triangles_storage_buffer = vulkan_abstraction::GpuOnlyBuffer::new_from_data(
                 Rc::clone(&self.core),
                 &dummy,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
                 "emissive triangles dummy storage buffer",
             )?;
         } else {
             self.emissive_triangles_storage_buffer = vulkan_abstraction::GpuOnlyBuffer::new_from_data(
                 Rc::clone(&self.core),
                 emissive_triangles,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
                 "emissive triangles storage buffer",
             )?;
         }
         Ok(())
     }
-   
-    fn set_meshes_info<'a, V, I>(
+
+    pub fn add_meshes_info( //TODO this is the blocking impl
         &mut self,
-        blas_instances: &[vulkan_abstraction::BlasInstance<'a, V, I>],
+        blas_instances: &[vulkan_abstraction::BlasInstance],
+        materials: &[vulkan_abstraction::gltf::Material],
+    ) -> SrResult<()> {
+        let mut copy_buffers = Vec::with_capacity(materials.len());
+        for (blas_instance, material) in std::iter::zip(blas_instances.iter(), materials.iter()) {
+            let mesh_info = MeshesInfoBufferContents {
+                vertex_buffer: blas_instance.blas.vertex_buffer().get_device_address(),
+                index_buffer: blas_instance.blas.index_buffer().get_device_address(),
+                material: Material::from(material),
+            };
+            let (index, copy_buffer) = self.meshes_info_storage_buffer.allocate_and_update(&mesh_info)?;//TODO use the one for &[T]
+            copy_buffers.push(copy_buffer);
+        }
+        if copy_buffers.is_empty() {
+            return Ok(());
+        }
+
+        let device = self.core.device().inner();
+        let transfer_queue = self.core.transfer_queue();
+        let cmd_pool = self.core.transfer_cmd_pool();
+
+        let cmd_buf = vulkan_abstraction::cmd_buffer::new_command_buffer(cmd_pool, device)?;
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        unsafe {
+            device.begin_command_buffer(cmd_buf, &begin_info)?;
+
+            // 3. Submit the Batch Copy
+            // This single command executes all regions you collected in the loop
+            device.cmd_copy_buffer(
+                cmd_buf,
+                self.meshes_info_storage_buffer.inner_staging(),
+                self.meshes_info_storage_buffer.inner(),
+                &copy_buffers,
+            );
+            // 4. Memory Barrier (Availability -> Visibility)
+            // We must ensure the TRANSFER writes are visible before shaders try to read them.
+            let buffer_barrier = vk::BufferMemoryBarrier2::default()
+                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                // TODO Adjust dst_stage_mask based on where you read this!
+                // e.g., RAY_TRACING_SHADER_KHR or FRAGMENT_SHADER
+                .dst_stage_mask(vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR | vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+                .buffer(self.meshes_info_storage_buffer.inner())
+                .offset(0)
+                .size(vk::WHOLE_SIZE); // You can be more granular here if you want
+
+            let dependency_info = vk::DependencyInfo::default()
+                .buffer_memory_barriers(std::slice::from_ref(&buffer_barrier));
+
+            device.cmd_pipeline_barrier2(cmd_buf, &dependency_info);
+
+            device.end_command_buffer(cmd_buf)?;
+        }
+
+        // 5. Submit and Wait (Blocking)
+        // NOTE: submit_sync blocks the CPU until the GPU finishes.
+        transfer_queue.submit_sync(cmd_buf)?;
+
+        // 6. Cleanup
+        unsafe { device.free_command_buffers(cmd_pool.inner(), &[cmd_buf]) };
+
+        Ok(())
+    }
+
+    fn create_meshes_info(
+        &mut self,
+        blas_instances: &[vulkan_abstraction::BlasInstance],
         materials: &[vulkan_abstraction::gltf::Material],
     ) -> SrResult<()> {
         let meshes_info_storage_buffer_contents = std::iter::zip(blas_instances.iter(), materials.iter())
@@ -201,16 +270,13 @@ impl ShaderDataBuffers {
                 material: Material::from(material),
             })
             .collect::<Vec<_>>();
-        
-        
                 
-        self.meshes_info_storage_buffer = vulkan_abstraction::GpuOnlyBuffer::new_from_data(
+        self.meshes_info_storage_buffer = vulkan_abstraction::ArenaIndexedWithRingStagingBuffer::new_into_gpu_from_data(
             Rc::clone(&self.core),
             &meshes_info_storage_buffer_contents,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
             "meshes info storage buffer",
         )?;
-        
 
         Ok(())
     }

@@ -17,11 +17,12 @@ gltf = { version = "1.4.1", features = ["KHR_lights_punctual", "KHR_materials_em
 log = { version = "0.4.28", features = ["release_max_level_warn"] }
 gpu-allocator = "0.28.0"
 bytemuck = "1.24.0"
+parking_lot = "0.12.5"
 #na = "0.32.2"
 
 
 [build-dependencies]
-shaderc = "0.9"
+shaderc = "0.10.1"
 
 [dev-dependencies]
 winit = { version = "0.30.9", features = ["rwh_05"] } #window example

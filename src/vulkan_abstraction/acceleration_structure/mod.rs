@@ -14,7 +14,7 @@ pub struct AccelerationStructure {
     core: Rc<vulkan_abstraction::Core>,
     handle: vk::AccelerationStructureKHR,
     #[allow(dead_code)]
-    buffer: vulkan_abstraction::GpuOnlyBuffer<u8>,
+    buffer: vulkan_abstraction::GpuOnlyBuffer,
     allow_update: bool,
     level: vk::AccelerationStructureTypeKHR,
     number_of_geometries: usize,
@@ -78,9 +78,9 @@ impl AccelerationStructure {
             vk::AccelerationStructureTypeKHR::GENERIC => "generic acceleration structure buffer",
             _ => "(unknown AS type) acceleration structure buffer",
         };
-        let buffer = vulkan_abstraction::GpuOnlyBuffer::new(
+        let buffer = vulkan_abstraction::GpuOnlyBuffer::new::<u8>(
             Rc::clone(&core),
-            acceleration_structure_size_info.acceleration_structure_size as usize,
+            acceleration_structure_size_info.acceleration_structure_size,
             vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR
                 | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
                 | vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -102,9 +102,12 @@ impl AccelerationStructure {
         }?;
 
         // the scratch buffer that will be used for building the acceleration structure (and can be dropped afterwards)
-        let scratch_buffer: vulkan_abstraction::buffer::GpuOnlyBuffer<T> = vulkan_abstraction::GpuOnlyBuffer::new(
+        let scratch_buffer = vulkan_abstraction::GpuOnlyBuffer::new_aligned::<u8>(
             Rc::clone(&core),
-            acceleration_structure_size_info.build_scratch_size as usize,
+            acceleration_structure_size_info.build_scratch_size,
+            core.device()
+                .acceleration_structure_properties()
+                .min_acceleration_structure_scratch_offset_alignment as u64,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
             "acceleration structure build scratch buffer",
         )?;
@@ -120,7 +123,7 @@ impl AccelerationStructure {
         // - fill with the commands to build the acceleration structure
         // - pass to the queue to be executed (thus building the acceleration structure)
         // - free
-        let build_command_buffer = vulkan_abstraction::cmd_buffer::new_command_buffer(core.cmd_pool(), core.device().inner())?;
+        let build_command_buffer = vulkan_abstraction::cmd_buffer::new_command_buffer(core.graphics_cmd_pool(), core.device().inner())?;
 
         //record build_command_buffer with the commands to build the acceleration structure
         unsafe {
@@ -140,13 +143,13 @@ impl AccelerationStructure {
 
         // build_command_buffer must not be in a pending state when
         // free_command_buffers is called on it
-        // NOTE: this is actually quite bad for performance if there are many acceleration structure builds/updates being done one after the other
-        core.queue().submit_sync(build_command_buffer)?;
+        // NOTE: this is actually quite bad for performance if there are many acceleration structure builds/updates being done one after the other TODO async 
+        core.graphics_queue().submit_sync(build_command_buffer)?;
 
         unsafe {
             core.device()
                 .inner()
-                .free_command_buffers(core.cmd_pool().inner(), &[build_command_buffer]);
+                .free_command_buffers(core.graphics_cmd_pool().inner(), &[build_command_buffer]);
         }
 
         Ok(Self {
@@ -222,9 +225,9 @@ impl AccelerationStructure {
         };
 
         // the scratch buffer that will be used for building the acceleration structure (and can be dropped afterwards)
-        let scratch_buffer = vulkan_abstraction::GpuOnlyBuffer::new(
+        let scratch_buffer = vulkan_abstraction::GpuOnlyBuffer::new::<u8>(
             Rc::clone(&self.core),
-            size_info.build_scratch_size as usize,
+            size_info.build_scratch_size,
             vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::STORAGE_BUFFER,
             "acceleration structure update scratch buffer",
         )?;
@@ -242,7 +245,7 @@ impl AccelerationStructure {
         // - pass to the queue to be executed (thus building the acceleration structure)
         // - free
         let build_command_buffer =
-            vulkan_abstraction::cmd_buffer::new_command_buffer(self.core.cmd_pool(), self.core.device().inner())?;
+            vulkan_abstraction::cmd_buffer::new_command_buffer(self.core.graphics_cmd_pool(), self.core.device().inner())?;
 
         //record build_command_buffer with the commands to build the acceleration structure
         unsafe {
@@ -263,13 +266,13 @@ impl AccelerationStructure {
         // build_command_buffer must not be in a pending state when
         // free_command_buffers is called on it
         // NOTE: this is actually quite bad for performance if there are many acceleration structure builds/updates being done one after the other
-        self.core.queue().submit_sync(build_command_buffer)?;
+        self.core.graphics_queue().submit_sync(build_command_buffer)?;
 
         unsafe {
             self.core
                 .device()
                 .inner()
-                .free_command_buffers(self.core.cmd_pool().inner(), &[build_command_buffer]);
+                .free_command_buffers(self.core.graphics_cmd_pool().inner(), &[build_command_buffer]);
         }
 
         log::debug!("{:?} acceleration structure updated", self.level);

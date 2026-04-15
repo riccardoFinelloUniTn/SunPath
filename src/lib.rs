@@ -16,7 +16,7 @@ use ash::vk;
 use crate::utils::env_var_as_bool;
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
-use crate::vulkan_abstraction::{BlasMetaData, BlasState, DenoiseDescriptorSetLayout, DenoisePass, Dynamic, PostProcessDescriptorSets, PostprocessPass, TemporalPass};
+use crate::vulkan_abstraction::{BlasInstance, BlasMetaData, BlasState, Buffer, DenoiseDescriptorSetLayout, DenoisePass, Dynamic, PostProcessDescriptorSets, PostprocessPass, TemporalPass};
 
 pub const DENOISE_PASSES: u32 = 5;
 
@@ -24,6 +24,15 @@ pub const EXPOSURE: f32 = 1.0;
 
 const MAX_TLAS_INSTANCES: usize = 10_000;
 
+/// The number of concurrent frames that are processed (both by CPU and GPU).
+///
+/// Apparently 2 is the most common choice. Empirically it seems like the performance doesn't really
+/// get any better with a higher number, but it does get measurably worse with only 1.
+pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
+
+
+//TODO add a list of callbacks to call at the end of frames for cleanup or at start for setup
+//TODO deferred deallocation for buffers and acceleration structures
 struct ImageDependentData {
     pub raytracing_cmd_buf: vulkan_abstraction::CmdBuffer,
     pub blit_cmd_buf: vulkan_abstraction::CmdBuffer,
@@ -39,6 +48,8 @@ struct ImageDependentData {
     diffuse_image: vulkan_abstraction::Image,
     #[allow(unused)]
     motion_vector_image: vulkan_abstraction::Image,
+
+    pub raytracing_finished_semaphore: vulkan_abstraction::Semaphore,
 
     #[allow(unused)]
     pub raytracing_descriptor_sets: vulkan_abstraction::RaytracingDescriptorSets,
@@ -58,12 +69,13 @@ pub struct Renderer {
 
     shader_data_buffers: vulkan_abstraction::ShaderDataBuffers,
 
-    blases: Vec<vulkan_abstraction::BLAS<vulkan_abstraction::gltf::Vertex>>,
-    tlas: vulkan_abstraction::TLAS<vulkan_abstraction::gltf::Vertex>,
+    blases: Vec<vulkan_abstraction::BLAS>,
+    tlas: vulkan_abstraction::TLAS,
+
 
     is_tlas_dirty : bool,
 
-    instances_buffer: vulkan_abstraction::GpuOnlyBuffer<vk::AccelerationStructureInstanceKHR>,
+    instances_buffer: vulkan_abstraction::StagingBuffer<vk::AccelerationStructureInstanceKHR>,
     cpu_instances_data: Vec<vulkan_abstraction::BlasMetaData>,
 
     scene_images: Vec<vulkan_abstraction::Image>,
@@ -93,7 +105,8 @@ pub struct Renderer {
     //2 images to avoid race conditions when reading/writing
     pub accumulation_images: [vulkan_abstraction::Image; 2],
     pub denoising_images: [vulkan_abstraction::Image; 2],
-    pub frame_count: u32,
+    ///this is used for temporal accumulation, there is an absolute frame counter in the core
+    pub relative_frame_count: u32,
 
     prev_view_proj: nalgebra::Matrix4<f32>, //used to calculate motion vectors
 }
@@ -112,7 +125,7 @@ impl Renderer {
         create_surface: &CreateSurfaceFn,
     ) -> SrResult<(Self, vk::SurfaceKHR)> {
         let (r, s) = Self::new_impl(image_extent, image_format, instance_exts, Some(create_surface))?;
-        return Ok((r, s.unwrap()));
+        Ok((r, s.unwrap()))
     }
 
     fn new_impl(
@@ -134,12 +147,14 @@ impl Renderer {
 
         let image_extent = utils::tuple_to_extent3d(image_extent);
 
-        let mut instances_buffer = vulkan_abstraction::GpuOnlyBuffer::new(
+        let mut instances_buffer = vulkan_abstraction::StagingBuffer::new(
             Rc::clone(&core),
-            MAX_TLAS_INSTANCES,
-            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-            "Persistent TLAS Instances Buffer",
-        )?;
+            MAX_TLAS_INSTANCES as vk::DeviceSize,
+            vk::BufferUsageFlags::STORAGE_BUFFER |
+                vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS |
+                vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            "Cpu side instances of blases"
+        )?; //TODO const value a caso
 
 
         let blases = vec![];
@@ -242,6 +257,7 @@ impl Renderer {
             vk::SamplerMipmapMode::LINEAR,
         )?;
 
+
         Ok((
             Self {
                 image_dependant_data,
@@ -274,7 +290,7 @@ impl Renderer {
 
                 accumulation_images,
                 denoising_images,
-                frame_count: 0,
+                relative_frame_count: 0,
 
                 fallback_texture_image,
                 fallback_texture_sampler,
@@ -357,11 +373,11 @@ impl Renderer {
             device.end_command_buffer(setup_cmd_buf.inner())?;
 
             let fence = setup_cmd_buf.fence_mut().submit()?;
-            self.core.queue().submit_async(setup_cmd_buf.inner(), &[], &[], &[], fence)?;
+            self.core.graphics_queue().submit_async(setup_cmd_buf.inner(), &[], &[], &[], fence)?;
             setup_cmd_buf.fence_mut().wait()?;
         }
 
-        self.frame_count = 0;
+        self.relative_frame_count = 0;
 
         Ok(())
     }
@@ -496,14 +512,14 @@ impl Renderer {
 
                     // Submit to GPU and immediately wait for it to finish
                     let fence = setup_cmd_buf.fence_mut().submit()?;
-                    self.core.queue().submit_async(setup_cmd_buf.inner(), &[], &[], &[], fence)?;
+                    self.core.graphics_queue().submit_async(setup_cmd_buf.inner(), &[], &[], &[], fence)?;
 
                     // Block the CPU so we guarantee the transitions are done before rendering starts
                     setup_cmd_buf.fence_mut().wait()?;
                 }
             }
 
-            let raytracing_descriptor_sets = vulkan_abstraction::RaytracingDescriptorSets::new::<vulkan_abstraction::gltf::Vertex, u32>(
+            let raytracing_descriptor_sets = vulkan_abstraction::RaytracingDescriptorSets::new(
                 Rc::clone(&self.core),
                 &self.ray_tracing_descriptor_set_layout,
                 &self.tlas,
@@ -569,6 +585,8 @@ impl Renderer {
                 unsafe { self.core.device().inner().end_command_buffer(blit_cmd_buf.inner()) }?;
             }
 
+            let raytracing_finished_semaphore =  vulkan_abstraction::Semaphore::new(self.core.clone())?;
+
             self.image_dependant_data.insert(
                 *post_blit_image,
                 ImageDependentData {
@@ -584,6 +602,7 @@ impl Renderer {
                     temporal_accumulation_descriptor_sets,
                     denoise_descriptor_sets,
                     postprocess_descriptor_sets,
+                    raytracing_finished_semaphore,
                 },
             );
         }
@@ -680,9 +699,22 @@ impl Renderer {
         let postprocess_descriptor_sets_ptr =
             &img_dependent_data.postprocess_descriptor_sets as *const vulkan_abstraction::PostProcessDescriptorSets;
 
+
+
         unsafe {
             // Use (*this_ptr).core because 'self.core' is locked by 'img_dependent_data'
             let device = (*this_ptr).core.device().inner();
+
+
+
+            // Supponiamo che tu abbia salvato il semaforo restituito dalla transfer queue
+            // in un campo opzionale `self.pending_transfer_semaphore`
+            let wait_semaphores = (*this_ptr).core.transfer_semaphores_mut().drain(..).collect::<Vec<_>>();
+                // IMPORTANTE: Diciamo alla GPU di aspettare PRIMA di lanciare i Ray Tracing Shader
+                // Se la TLAS viene aggiornata in questo cmd buffer, aggiungi anche ACCELERATION_STRUCTURE_BUILD_KHR
+            let wait_stages = wait_semaphores.iter().map(|semaphore| {
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR | vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+            }).collect::<Vec<_>>();
 
 
             let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -732,7 +764,7 @@ impl Renderer {
                     .old_layout(vk::ImageLayout::GENERAL)
                     .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                     .image(img_dependent_data.diffuse_image.inner())
-                    .subresource_range(*img_dependent_data.normal_image.image_subresource_range()),
+                    .subresource_range(*img_dependent_data.diffuse_image.image_subresource_range()),
             ];
 
             device.cmd_pipeline_barrier(
@@ -826,17 +858,17 @@ impl Renderer {
             device.end_command_buffer(cmd_buf)?;
 
             // Submit using (*this_ptr)
-            (*this_ptr).core.queue().submit_async(
+            (*this_ptr).core.graphics_queue().submit_async(
                 img_dependent_data.raytracing_cmd_buf.inner(),
-                &[],
-                &[],
-                &[],
+                &wait_semaphores,
+                &wait_stages,
+                &[img_dependent_data.raytracing_finished_semaphore.inner()],
                 img_dependent_data.raytracing_cmd_buf.fence_mut().submit()?,
             )?;
         }
 
         // Blitting
-        let (wait_sems, wait_dst_stages) = ([wait_sem], [vk::PipelineStageFlags::ALL_GRAPHICS]);
+        let (wait_sems, wait_dst_stages) = ([wait_sem , img_dependent_data.raytracing_finished_semaphore.inner()], [vk::PipelineStageFlags::ALL_GRAPHICS ,vk::PipelineStageFlags::TRANSFER]);
         let (wait_sems, wait_dst_stages) = if wait_sem == vk::Semaphore::null() {
             ([].as_slice(), [].as_slice())
         } else {
@@ -847,7 +879,7 @@ impl Renderer {
 
         unsafe {
             // Again, use (*this_ptr) because img_dependent_data is still alive here
-            (*this_ptr).core.queue().submit_async(
+            (*this_ptr).core.graphics_queue().submit_async(
                 img_dependent_data.blit_cmd_buf.inner(),
                 &wait_sems,
                 &wait_dst_stages,
@@ -886,11 +918,11 @@ impl Renderer {
         let device = self.core.device().inner();
 
         //ping pong to avoid errors when using accumulation images
-        let history_idx = (self.frame_count % 2) as usize;
-        let accum_idx = ((self.frame_count + 1) % 2) as usize;
+        let history_idx = (self.relative_frame_count % 2) as usize;
+        let accum_idx = ((self.relative_frame_count + 1) % 2) as usize;
 
         // Use GENERAL for everything to rule out layout mismatches
-        let (old_layout, src_stage, src_access) = if self.frame_count == 0 {
+        let (old_layout, src_stage, src_access) = if self.relative_frame_count == 0 {
             (
                 vk::ImageLayout::UNDEFINED,
                 vk::PipelineStageFlags::TOP_OF_PIPE,
@@ -906,12 +938,13 @@ impl Renderer {
 
         // Initializing push constant values
         let push_constants = vulkan_abstraction::RaytracingPushConstant {
-            frame_count: self.frame_count,
+            frame_count: self.relative_frame_count,
             use_srgb: self.image_format == vk::Format::R8G8B8A8_SRGB,
             _padding: [0; 3],
         };
 
-        self.frame_count += 1;
+        self.relative_frame_count += 1;
+        *self.core.absolute_frame_count.borrow_mut() += 1 ;
         unsafe {
             let subresource_range = vk::ImageSubresourceRange::default()
                 .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -941,7 +974,7 @@ impl Renderer {
                 vk::AccessFlags::SHADER_WRITE,
             );
 
-            let (hist_old, hist_src) = if self.frame_count == 1 {
+            let (hist_old, hist_src) = if self.relative_frame_count == 1 {
                 (vk::ImageLayout::UNDEFINED, vk::AccessFlags::empty())
             } else {
                 (vk::ImageLayout::GENERAL, vk::AccessFlags::SHADER_WRITE)
@@ -956,7 +989,7 @@ impl Renderer {
                 vk::AccessFlags::SHADER_READ,
             );
 
-            let (accum_old, accum_src) = if self.frame_count == 1 {
+            let (accum_old, accum_src) = if self.relative_frame_count == 1 {
                 (vk::ImageLayout::UNDEFINED, vk::AccessFlags::empty())
             } else {
                 (vk::ImageLayout::GENERAL, vk::AccessFlags::SHADER_READ)
@@ -974,7 +1007,7 @@ impl Renderer {
             device.cmd_pipeline_barrier(
                 cmd_buf,
                 // Frame 1: Wait for nothing. Frame 2+: Wait for previous Ray Tracing.
-                if self.frame_count == 1 {
+                if self.relative_frame_count == 1 {
                     vk::PipelineStageFlags::TOP_OF_PIPE
                 } else {
                     vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR
@@ -1036,8 +1069,8 @@ impl Renderer {
     ) -> SrResult<()> {
         let device = self.core.device().inner();
 
-        let history_idx = (self.frame_count % 2) as usize;
-        let accum_idx = ((self.frame_count + 1) % 2) as usize;
+        let history_idx = (self.relative_frame_count % 2) as usize;
+        let accum_idx = ((self.relative_frame_count + 1) % 2) as usize;
 
         // 1. Prepare inputs (RT Image and Motion Vectors)
         let rt_barrier = vk::ImageMemoryBarrier::default()
@@ -1084,13 +1117,13 @@ impl Renderer {
                 layer_count: 1,
             });
 
-        let history_old_layout = if self.frame_count == 0 {
+        let history_old_layout = if self.relative_frame_count == 0 {
             vk::ImageLayout::UNDEFINED
         } else {
             vk::ImageLayout::GENERAL
         };
 
-        let history_src_access = if self.frame_count == 0 {
+        let history_src_access = if self.relative_frame_count == 0 {
             vk::AccessFlags::empty()
         } else {
             vk::AccessFlags::SHADER_WRITE
@@ -1142,7 +1175,7 @@ impl Renderer {
                 self.temporal_accumulation_pipeline.layout(),
                 vk::ShaderStageFlags::COMPUTE,
                 0,
-                &self.frame_count.to_ne_bytes(),
+                &self.relative_frame_count.to_ne_bytes(),
             );
 
             let group_x = (width + 15) / 16;
@@ -1170,7 +1203,7 @@ impl Renderer {
         let total_passes = DENOISE_PASSES;
 
         // Determine which accumulation image is the "latest" history to read from
-        let history_idx = (self.frame_count % 2) as usize;
+        let history_idx = (self.relative_frame_count % 2) as usize;
 
         for pass_index in 0..total_passes {
             // Step width follows a-trous wavelet pattern: 1, 2, 4, 8...
@@ -1231,7 +1264,7 @@ impl Renderer {
                 });
 
             let push_constants = vulkan_abstraction::DenoisePushConstant {
-                frame_count: self.frame_count,
+                frame_count: self.relative_frame_count,
                 step_width,
             };
 
@@ -1531,15 +1564,15 @@ impl Renderer {
         //     blas
         // }
 
-        let blas_instances: Vec<vulkan_abstraction::BlasInstance<'_, vulkan_abstraction::gltf::Vertex, u32>> = self.cpu_instances_data.iter().enumerate().map(|(index, cpu_instance)|{
-            vulkan_abstraction::BlasInstance{
+        let blas_instances = &self.cpu_instances_data.iter().enumerate().map(|(index, cpu_instance)|{
+            BlasInstance{
                 blas: &self.blases[index],
                 transform: cpu_instance.transform,
                 blas_instance_index: cpu_instance.blas_instance_index,
             }
         }).collect::<Vec<_>>();
 
-        self.tlas.update(&blas_instances, &mut self.instances_buffer )?;
+        self.tlas.update(blas_instances, &mut self.instances_buffer )?;
         Ok(())
     }
 
@@ -1549,15 +1582,15 @@ impl Renderer {
         // NOTE: For better performance later, you can swap `rebuild` for an `update`
         // command if your TLAS abstraction supports VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
 
-        let blas_instances: Vec<vulkan_abstraction::BlasInstance<'_, vulkan_abstraction::gltf::Vertex, u32>> = self.cpu_instances_data.iter().enumerate().map(|(index, cpu_instance)|{
-            vulkan_abstraction::BlasInstance{
+        let blas_instances = &self.cpu_instances_data.iter().enumerate().map(|(index, cpu_instance)|{
+            BlasInstance{
                 blas: &self.blases[index],
                 transform: cpu_instance.transform,
                 blas_instance_index: cpu_instance.blas_instance_index,
             }
         }).collect::<Vec<_>>();
 
-        self.tlas.update(&blas_instances, &mut self.instances_buffer )?;
+        self.tlas.update(blas_instances, &mut self.instances_buffer )?;
         Ok(())
     }
 }
@@ -1570,7 +1603,7 @@ const IS_DEBUG_BUILD: bool = cfg!(debug_assertions);
 
 impl Drop for Renderer {
     fn drop(&mut self) {
-        match self.core().queue().wait_idle() {
+        match self.core().graphics_queue().wait_idle() {
             Ok(()) => {}
             Err(e) => match e.get_source() {
                 ErrorSource::Vulkan(e) => {

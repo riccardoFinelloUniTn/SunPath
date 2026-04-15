@@ -1,8 +1,9 @@
+use crate::vulkan_abstraction::buffer::HostAccessibleBuffer;
 use std::rc::Rc;
 
 use crate::{error::SrResult, vulkan_abstraction};
 use ash::vk;
-use crate::vulkan_abstraction::HostAccessibleBuffer;
+use crate::vulkan_abstraction::Buffer;
 
 fn aligned_size(value: u32, alignment: u32) -> u32 {
     (value + alignment - 1) & !(alignment - 1)
@@ -54,10 +55,14 @@ impl ShaderBindingTable {
         }?;
 
         // Allocate a buffer for storing the SBT.
-        let sbt_buffer_size = (raygen_region.size + miss_region.size + hit_region.size + callable_region.size) as usize;
-        let mut sbt_buffer = vulkan_abstraction::StagingBuffer::new(
+        let sbt_buffer_size = (raygen_region.size + miss_region.size + hit_region.size + callable_region.size) as vk::DeviceSize;
+        let mut sbt_buffer : vulkan_abstraction::StagingBuffer<u8>= vulkan_abstraction::StagingBuffer::new(
             Rc::clone(core),
             sbt_buffer_size,
+            vk::BufferUsageFlags::TRANSFER_SRC
+                | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | vk::BufferUsageFlags::SHADER_BINDING_TABLE_KHR,
+            "shader binding table buffer",
         )?;
         let sbt_buffer_data = sbt_buffer.map_mut()?;
         let mut buffer_index = 0;

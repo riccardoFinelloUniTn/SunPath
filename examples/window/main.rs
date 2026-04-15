@@ -3,11 +3,7 @@ use std::rc::Rc;
 use ash::vk;
 use nalgebra as na;
 use std::time::Instant;
-use sunray::{
-    camera::Camera,
-    error::{ErrorSource, SrResult},
-    vulkan_abstraction,
-};
+use sunray::{camera::Camera, error::{ErrorSource, SrResult}, vulkan_abstraction, MAX_FRAMES_IN_FLIGHT};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -44,11 +40,6 @@ struct App {
     frames_since_check: u32,
 }
 
-/// The number of concurrent frames that are processed (both by CPU and GPU).
-///
-/// Apparently 2 is the most common choice. Empirically it seems like the performance doesn't really
-/// get any better with a higher number, but it does get measurably worse with only 1.
-const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 impl App {
     fn build_resources(&mut self, size: (u32, u32)) -> SrResult<()> {
@@ -253,7 +244,7 @@ impl App {
             .swapchains(&swapchains)
             .image_indices(&image_indices);
 
-        let queue = self.res().renderer.core().queue().inner();
+        let queue = self.res().renderer.core().graphics_queue().inner();
 
         unsafe { self.res().swapchain.device().queue_present(queue, &present_info) }?;
 
@@ -286,7 +277,7 @@ impl App {
 
         
         //TODO it is more costly than expected and need fences and semaphores
-         self.res_mut().renderer.rebuild_tlas()?;
+        //  self.res_mut().renderer.rebuild_tlas()?;
 
         let frame_index = self.frame_count as usize % MAX_FRAMES_IN_FLIGHT;
 
@@ -329,7 +320,7 @@ impl App {
             }
         }
 
-        self.res().renderer.core().queue().submit_async(
+        self.res().renderer.core().graphics_queue().submit_async(
             img_barrier_to_present_cmd_buf_inner,
             &[],
             &[],

@@ -56,7 +56,7 @@ pub struct CmdBuffer {
 
 impl CmdBuffer {
     pub fn new(core: Rc<vulkan_abstraction::Core>) -> SrResult<Self> {
-        let handle = vulkan_abstraction::cmd_buffer::new_command_buffer(core.cmd_pool(), core.device().inner())?;
+        let handle = vulkan_abstraction::cmd_buffer::new_command_buffer(core.graphics_cmd_pool(), core.device().inner())?;
         let fence = vulkan_abstraction::Fence::new_signaled(Rc::clone(core.device()))?;
         Ok(Self { core, handle, fence })
     }
@@ -87,7 +87,7 @@ impl Drop for CmdBuffer {
             self.core
                 .device()
                 .inner()
-                .free_command_buffers(self.core.cmd_pool().inner(), &[self.handle]);
+                .free_command_buffers(self.core.graphics_cmd_pool().inner(), &[self.handle]);
         }
     }
 }

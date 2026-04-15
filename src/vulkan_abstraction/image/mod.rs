@@ -8,6 +8,7 @@ use std::rc::Rc;
 use ash::vk;
 
 use crate::{error::SrResult, utils, vulkan_abstraction};
+use crate::vulkan_abstraction::Buffer;
 
 pub struct Image {
     core: Rc<vulkan_abstraction::Core>,
@@ -44,7 +45,7 @@ impl Image {
             _ => todo!(), // TODO
         };
 
-        let staging_buffer = vulkan_abstraction::StagingBuffer::new_from_data(Rc::clone(&image.core), &image_data)?;
+        let staging_buffer = vulkan_abstraction::StagingBuffer::new_temp_from_data(Rc::clone(&image.core), &image_data)?;
 
         image.copy_from_buffer(&staging_buffer)?;
 
@@ -133,13 +134,13 @@ impl Image {
 
     // copies from a staging buffer mainly useful to copy from a staging buffer to a device buffer
     // note that this function internally changes the image's layout to TRANSFER_DST_OPTIMAL
-    pub fn copy_from_buffer(&mut self, src: &vulkan_abstraction::StagingBuffer<u8>) -> SrResult<()> {
+    pub fn copy_from_buffer(&mut self, src: & impl Buffer ) -> SrResult<()> {
         if src.is_null() {
             return Ok(());
         }
 
         let device = self.core.device().inner();
-        let cmd_buf = vulkan_abstraction::cmd_buffer::new_command_buffer(self.core.cmd_pool(), device)?;
+        let cmd_buf = vulkan_abstraction::cmd_buffer::new_command_buffer(self.core.graphics_cmd_pool(), device)?;
 
         let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
@@ -183,9 +184,9 @@ impl Image {
             device.end_command_buffer(cmd_buf)?;
         }
 
-        self.core.queue().submit_sync(cmd_buf)?;
+        self.core.graphics_queue().submit_sync(cmd_buf)?;
 
-        unsafe { device.free_command_buffers(self.core.cmd_pool().inner(), &[cmd_buf]) };
+        unsafe { device.free_command_buffers(self.core.graphics_cmd_pool().inner(), &[cmd_buf]) };
 
         Ok(())
     }
