@@ -189,20 +189,72 @@ impl ShaderDataBuffers {
         Ok(())
     }
 
-    pub fn add_meshes_info( 
+    pub fn add_meshes_info( //TODO this is the blocking impl
         &mut self,
         blas_instances: &[vulkan_abstraction::BlasInstance],
         materials: &[vulkan_abstraction::gltf::Material],
     ) -> SrResult<()> {
-
-        for (blas_instance, material) in std::iter::zip(blas_instances.iter(), materials.iter()) { 
+        let mut copy_buffers = Vec::with_capacity(materials.len());
+        for (blas_instance, material) in std::iter::zip(blas_instances.iter(), materials.iter()) {
             let mesh_info = MeshesInfoBufferContents {
                 vertex_buffer: blas_instance.blas.vertex_buffer().get_device_address(),
                 index_buffer: blas_instance.blas.index_buffer().get_device_address(),
                 material: Material::from(material),
             };
-            let _ = self.meshes_info_storage_buffer.allocate_and_update(&mesh_info)?;//TODO use the one for &[T]
+            let (index, copy_buffer) = self.meshes_info_storage_buffer.allocate_and_update(&mesh_info)?;//TODO use the one for &[T]
+            copy_buffers.push(copy_buffer);
         }
+        if copy_buffers.is_empty() {
+            return Ok(());
+        }
+
+        let device = self.core.device().inner();
+        let transfer_queue = self.core.transfer_queue();
+        let cmd_pool = self.core.transfer_cmd_pool();
+
+        let cmd_buf = vulkan_abstraction::cmd_buffer::new_command_buffer(cmd_pool, device)?;
+        let begin_info = vk::CommandBufferBeginInfo::default()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        unsafe {
+            device.begin_command_buffer(cmd_buf, &begin_info)?;
+
+            // 3. Submit the Batch Copy
+            // This single command executes all regions you collected in the loop
+            device.cmd_copy_buffer(
+                cmd_buf,
+                self.meshes_info_storage_buffer.inner_staging(),
+                self.meshes_info_storage_buffer.inner(),
+                &copy_buffers,
+            );
+
+            // 4. Memory Barrier (Availability -> Visibility)
+            // We must ensure the TRANSFER writes are visible before shaders try to read them.
+            let buffer_barrier = vk::BufferMemoryBarrier2::default()
+                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                // TODO Adjust dst_stage_mask based on where you read this!
+                // e.g., RAY_TRACING_SHADER_KHR or FRAGMENT_SHADER
+                .dst_stage_mask(vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR | vk::PipelineStageFlags2::COMPUTE_SHADER)
+                .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+                .buffer(self.meshes_info_storage_buffer.inner())
+                .offset(0)
+                .size(vk::WHOLE_SIZE); // You can be more granular here if you want
+
+            let dependency_info = vk::DependencyInfo::default()
+                .buffer_memory_barriers(std::slice::from_ref(&buffer_barrier));
+
+            device.cmd_pipeline_barrier2(cmd_buf, &dependency_info);
+
+            device.end_command_buffer(cmd_buf)?;
+        }
+
+        // 5. Submit and Wait (Blocking)
+        // NOTE: submit_sync blocks the CPU until the GPU finishes.
+        transfer_queue.submit_sync(cmd_buf)?;
+
+        // 6. Cleanup
+        unsafe { device.free_command_buffers(cmd_pool.inner(), &[cmd_buf]) };
 
         Ok(())
     }

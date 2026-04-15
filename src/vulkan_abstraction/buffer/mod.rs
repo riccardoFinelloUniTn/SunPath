@@ -7,12 +7,12 @@ pub use index_buffer::*;
 use std::marker::PhantomData;
 pub use vertex_buffer::*;
 
-use crate::vulkan_abstraction::{Core};
-use crate::{error::*, vulkan_abstraction, MAX_FRAMES_IN_FLIGHT};
+use crate::vulkan_abstraction::Core;
+use crate::{MAX_FRAMES_IN_FLIGHT, error::*, vulkan_abstraction};
 use ash::vk;
-use ash::vk::{BufferUsageFlags, DeviceAddress, DeviceSize, Handle};
-use std::rc::Rc;
+use ash::vk::{BufferUsageFlags, BufferUsageFlags2KHR, DeviceAddress, DeviceSize, Handle};
 use log::{error, info};
+use std::rc::Rc;
 //TODO divide into a trait gpuonly and hostmemoery accessible and then do custom new functions with custom flags by leveraging strong typing
 
 pub fn get_memory_type_index(
@@ -44,6 +44,8 @@ pub fn get_memory_type_index(
 pub trait Buffer {
     fn inner(&self) -> vk::Buffer;
 
+    fn usage(&self) -> BufferUsageFlags ;
+
     fn raw(&self) -> &vulkan_abstraction::RawBuffer;
 
     fn raw_mut(&mut self) -> &mut vulkan_abstraction::RawBuffer;
@@ -70,6 +72,7 @@ pub struct RawBuffer {
     buffer: vk::Buffer,
     allocation: gpu_allocator::vulkan::Allocation,
     byte_size: u64,
+    usage: BufferUsageFlags,
 }
 
 impl RawBuffer {
@@ -85,8 +88,23 @@ impl RawBuffer {
             return Ok(Self::new_null(core));
         }
 
+        let queue_family_indices = [
+            core.graphics_queue().queue_family_index(),
+            core.transfer_queue().queue_family_index(),
+        ];
+
         let device = core.device().inner();
-        let buffer = {
+
+        let buffer = if queue_family_indices[0] != queue_family_indices[1] {
+            //TODO add parameters to choose concurrency or not
+            let buf_info = vk::BufferCreateInfo::default()
+                .size(byte_size)
+                .usage(buffer_usage_flags)
+                .sharing_mode(vk::SharingMode::CONCURRENT)
+                .queue_family_indices(&queue_family_indices);
+
+            unsafe { device.create_buffer(&buf_info, None) }?
+        } else {
             let buf_info = vk::BufferCreateInfo::default()
                 .size(byte_size)
                 .usage(buffer_usage_flags)
@@ -108,11 +126,13 @@ impl RawBuffer {
 
         unsafe { device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset()) }?;
 
+
         Ok(Self {
             core,
             buffer,
             allocation,
             byte_size,
+            usage : buffer_usage_flags,
         })
     }
 
@@ -122,6 +142,7 @@ impl RawBuffer {
             buffer: vk::Buffer::null(),
             allocation: gpu_allocator::vulkan::Allocation::default(),
             byte_size: 0,
+            usage : BufferUsageFlags::empty()
         }
     }
 
@@ -171,6 +192,10 @@ macro_rules! impl_buffer_trait {
                 &self.raw
             }
 
+            fn usage(&self) -> vk::BufferUsageFlags {
+                self.raw().usage.clone()
+            }
+
              fn raw_mut(&mut self) -> &mut vulkan_abstraction::RawBuffer {
                 &mut self.raw
             }
@@ -205,6 +230,10 @@ macro_rules! impl_buffer_trait {
         impl Buffer for $type {
             fn inner(&self) -> vk::Buffer {
                 self.raw.buffer
+            }
+
+            fn usage(&self) -> vk::BufferUsageFlags {
+                self.raw().usage.clone()
             }
 
              fn raw(&self) -> &vulkan_abstraction::RawBuffer {
@@ -251,7 +280,8 @@ pub struct StagingBuffer<T> {
 impl_buffer_trait!(StagingBuffer<T>);
 
 impl<T> StagingBuffer<T> {
-    pub fn new_temp(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self> { //TODO this gets used for new from data and it has no flags
+    pub fn new_temp(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self> {
+        //TODO this gets used for new from data and it has no flags
         let byte_size = (len * std::mem::size_of::<T>()) as vk::DeviceSize;
         let raw = RawBuffer::new_aligned(
             core,
@@ -288,7 +318,7 @@ impl<T> StagingBuffer<T> {
         })
     }
 
-    pub fn new_from_data(core: Rc<vulkan_abstraction::Core>, data: &[T]) -> SrResult<Self>
+    pub fn new_temp_from_data(core: Rc<vulkan_abstraction::Core>, data: &[T]) -> SrResult<Self>
     where
         T: Copy,
     {
@@ -304,18 +334,20 @@ impl<T> StagingBuffer<T> {
         Ok(staging_buffer)
     }
 
-
-    pub fn new_from_data_with_custom_length(core: Rc<vulkan_abstraction::Core>, data: &[T] , len : usize) -> SrResult<Self>
+    pub fn new_from_data(
+        core: Rc<vulkan_abstraction::Core>,
+        data: &[T],
+        buffer_usage_flags: vk::BufferUsageFlags,
+        name: &'static str,
+    ) -> SrResult<Self>
     where
         T: Copy,
     {
-        if  len < data.len()  {
-            return Err(SrError::new_custom(
-                format!("attempted to create an insufficiently sized buffer, src : {} bytes , dst : {len} bytes" , data.len() )
-            ));
+        if data.len() == 0 {
+            return Ok(Self::new_null(core));
         }
 
-        let mut staging_buffer = Self::new_temp(core, len)?;
+        let mut staging_buffer = Self::new(core, data.len(), buffer_usage_flags, name)?;
 
         let mapped_memory = staging_buffer.map_mut()?;
         mapped_memory[0..data.len()].copy_from_slice(data);
@@ -323,15 +355,43 @@ impl<T> StagingBuffer<T> {
         Ok(staging_buffer)
     }
 
+    pub fn new_from_data_with_custom_length(
+        core: Rc<vulkan_abstraction::Core>,
+        data: &[T],
+        len: usize,
+        buffer_usage_flags: vk::BufferUsageFlags,
+        name: &'static str,
+    ) -> SrResult<Self>
+    where
+        T: Copy,
+    {
+        if len < data.len() {
+            return Err(SrError::new_custom(format!(
+                "attempted to create an insufficiently sized buffer, src : {} bytes , dst : {len} bytes",
+                data.len()
+            )));
+        }
+
+        let mut staging_buffer = Self::new(core, len, buffer_usage_flags, name)?;
+
+        let mapped_memory = staging_buffer.map_mut()?;
+        mapped_memory[0..data.len()].copy_from_slice(data);
+
+        Ok(staging_buffer)
+    }
 
     pub fn new_cloned_to_gpu_only_buffer(&self, usage: vk::BufferUsageFlags, name: &'static str) -> SrResult<GpuOnlyBuffer> {
         let mut dst = GpuOnlyBuffer::new::<T>(self.raw.core.clone(), self.len(), usage, name)?;
-        self.clone_section_into_gpu_only_buffer(0 , self.byte_size() ,&mut dst )?;
+        self.clone_section_into_gpu_only_buffer(0, self.byte_size(), &mut dst)?;
         Ok(dst)
     }
 
-
-    pub fn clone_section_into_gpu_only_buffer(&self , src_offset : DeviceSize ,  src_section_length : DeviceSize  , dst: &mut GpuOnlyBuffer) -> SrResult<()> {
+    pub fn clone_section_into_gpu_only_buffer(
+        &self,
+        src_offset: DeviceSize,
+        src_section_length: DeviceSize,
+        dst: &mut GpuOnlyBuffer,
+    ) -> SrResult<()> {
         if self.is_null() {
             return Ok(());
         }
@@ -342,40 +402,64 @@ impl<T> StagingBuffer<T> {
         }
 
         if self.byte_size() < src_section_length + src_offset {
-            return Err(SrError::new_custom(
-                format!( "attempted to clone from outside the src buffer, src : {src_section_length} bytes , dst : {} bytes", dst.byte_size()),
-            ));
+            return Err(SrError::new_custom(format!(
+                "attempted to clone from outside the src buffer, src : {src_section_length} bytes , dst : {} bytes",
+                dst.byte_size()
+            )));
         }
         if dst.byte_size() < src_section_length {
-            return Err(SrError::new_custom(
-                format!("attempted to clone into an insufficiently sized buffer, src : {src_section_length} bytes , dst : {} bytes" , dst.byte_size())
-            ));
+            return Err(SrError::new_custom(format!(
+                "attempted to clone into an insufficiently sized buffer, src : {src_section_length} bytes , dst : {} bytes",
+                dst.byte_size()
+            )));
         }
 
         let device = self.raw.core.device().inner();
-        let cmd_buf =
-            vulkan_abstraction::cmd_buffer::new_command_buffer(self.raw.core.graphics_cmd_pool(), self.raw.core.device().inner())?;
+        let cmd_buf = vulkan_abstraction::cmd_buffer::new_command_buffer(
+            self.raw.core.transfer_cmd_pool(),
+            self.raw.core.device().inner(),
+        )?;
 
         let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
         unsafe { device.begin_command_buffer(cmd_buf, &begin_info) }?;
 
-
-        let regions = [vk::BufferCopy::default().size(src_section_length).src_offset(src_offset).dst_offset(0)];
+        let regions = [vk::BufferCopy::default()
+            .size(src_section_length)
+            .src_offset(src_offset)
+            .dst_offset(0)];
 
         unsafe { device.cmd_copy_buffer(cmd_buf, self.inner(), dst.inner(), &regions) };
 
+        // 1. Dynamically infer what is going to read this destination buffer
+        let dst_usage = dst.usage(); // Assuming you track this in GpuOnlyBuffer!
+        let (dst_stage_mask, dst_access_mask) = infer_read_masks_from_usage(dst_usage);
+
+        // 2. Point the barrier at the DESTINATION buffer, not the source!
+        let buffer_barrier = vk::BufferMemoryBarrier2::default()
+            .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+            .dst_stage_mask(dst_stage_mask)
+            .dst_access_mask(dst_access_mask)
+            .buffer(dst.inner())           // ✅ Fixed!
+            .offset(0)                     // ✅ Granular: only barrier what we copied
+            .size(src_section_length);     // ✅ Granular: only barrier what we copied
+
+        let dependency_info = vk::DependencyInfo::default().buffer_memory_barriers(std::slice::from_ref(&buffer_barrier));
+
+        unsafe { device.cmd_pipeline_barrier2(cmd_buf, &dependency_info) };
+
         unsafe { device.end_command_buffer(cmd_buf) }?;
 
-        self.raw.core.graphics_queue().submit_sync(cmd_buf)?;
+        self.raw.core.transfer_queue().submit_sync(cmd_buf)?;
 
-        unsafe { device.free_command_buffers(self.raw.core.graphics_cmd_pool().inner(), &[cmd_buf]) };
+        unsafe { device.free_command_buffers(self.raw.core.transfer_cmd_pool().inner(), &[cmd_buf]) };
 
         Ok(())
     }
 
     pub fn clone_into_gpu_only_buffer(&self, dst: &mut GpuOnlyBuffer) -> SrResult<()> {
-        self.clone_section_into_gpu_only_buffer(0 , self.byte_size() , dst )?;
+        self.clone_section_into_gpu_only_buffer(0, self.byte_size(), dst)?;
 
         Ok(())
     }
@@ -437,7 +521,8 @@ impl<T> HostAccessibleBuffer<T> for UniformBuffer<T> {
 
 // --- 3. Gpu Only Buffer (GpuOnly, Non-Mappable) ---
 
-pub struct GpuOnlyBuffer { //TODO flatten it into a trait,so index and vertex buffer are the impl 
+pub struct GpuOnlyBuffer {
+    //TODO flatten it into a trait,so index and vertex buffer are the impl
     raw: RawBuffer,
 }
 impl_buffer_trait!(GpuOnlyBuffer);
@@ -449,13 +534,14 @@ impl GpuOnlyBuffer {
         usage: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
+
         let byte_size = (len * std::mem::size_of::<T>()) as vk::DeviceSize;
         let raw = RawBuffer::new_aligned(
             core,
             byte_size,
             1,
             gpu_allocator::MemoryLocation::GpuOnly,
-            usage | vk::BufferUsageFlags::TRANSFER_DST ,
+            usage | vk::BufferUsageFlags::TRANSFER_DST,
             name,
         )?;
         log::debug!("New Gpu Buffer with these usage flags {usage:?}");
@@ -475,7 +561,7 @@ impl GpuOnlyBuffer {
             byte_size,
             alignment,
             gpu_allocator::MemoryLocation::GpuOnly,
-            usage | vk::BufferUsageFlags::TRANSFER_DST ,
+            usage | vk::BufferUsageFlags::TRANSFER_DST,
             name,
         )?;
         Ok(Self { raw })
@@ -498,7 +584,7 @@ impl GpuOnlyBuffer {
             return Ok(Self::new_null(core));
         }
 
-        let staging_buffer = StagingBuffer::new_from_data(Rc::clone(&core), data)?;
+        let staging_buffer = StagingBuffer::new_temp_from_data(Rc::clone(&core), data)?;
         let gpu_buffer =
             staging_buffer.new_cloned_to_gpu_only_buffer(buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_DST, name)?;
 
@@ -517,16 +603,19 @@ pub struct ArenaIndexedWithRingStagingBuffer<T> {
     free_slots: Vec<usize>, // A simple LIFO stack of available indices
     ///these are the freed slot of this frame,which will be available the next one
     pending_free_slots: VecDeque<(u64, usize)>,
-
 }
 
-
 impl<T> Buffer for ArenaIndexedWithRingStagingBuffer<T> {
-    ///This returns the gpu one 
+    ///This returns the gpu one
     fn inner(&self) -> vk::Buffer {
         self.gpu_only.inner()
     }
     ///This returns the gpu one
+    fn usage(&self) -> vk::BufferUsageFlags {
+        self.raw().usage.clone()
+    }
+
+
     fn raw(&self) -> &RawBuffer {
         self.gpu_only.raw()
     }
@@ -536,9 +625,9 @@ impl<T> Buffer for ArenaIndexedWithRingStagingBuffer<T> {
     }
     ///This returns the gpu one
     fn byte_size(&self) -> DeviceSize {
-       self.gpu_only.byte_size()
+        self.gpu_only.byte_size()
     }
-    ///This returns the gpu one 
+    ///This returns the gpu one
     fn is_null(&self) -> bool {
         self.gpu_only.raw.buffer == vk::Buffer::null()
     }
@@ -563,30 +652,44 @@ impl<T> Buffer for ArenaIndexedWithRingStagingBuffer<T> {
 }
 
 impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
-    pub(crate) fn new_into_gpu_from_data(core: Rc<Core>, data: &[T], buffer_usage_flags: BufferUsageFlags, name: &'static str) -> SrResult<Self>
-    {
+    pub(crate) fn new_into_gpu_from_data(
+        core: Rc<Core>,
+        data: &[T],
+        buffer_usage_flags: BufferUsageFlags,
+        name: &'static str,
+    ) -> SrResult<Self> {
         let capacity = data.len();
 
         if capacity == 0 {
             return Ok(Self::new_null(core));
         }
+        let staging_buffer = StagingBuffer::new_from_data_with_custom_length(
+            Rc::clone(&core),
+            data,
+            data.len() * MAX_FRAMES_IN_FLIGHT,
+            buffer_usage_flags,
+            name,
+        )?;
+        log::debug!(
+            "New Gpu Buffer for Arena with these usage flags {:?}",
+            buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_DST
+        );
+        let mut gpu_buffer = GpuOnlyBuffer::new::<T>(
+            core.clone(),
+            data.len(),
+            buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_DST,
+            name,
+        )?;
 
-        let staging_buffer = StagingBuffer::new_from_data_with_custom_length(Rc::clone(&core), data , data.len() * MAX_FRAMES_IN_FLIGHT )?;
-
-        let mut gpu_buffer = GpuOnlyBuffer::new::<T>(core.clone(), data.len(), buffer_usage_flags  | vk::BufferUsageFlags::TRANSFER_DST, name )?;
-
-
-            staging_buffer.clone_section_into_gpu_only_buffer(0, data.len() as DeviceSize, &mut gpu_buffer)?;
-        Ok(Self{
-            staging:staging_buffer,
+        staging_buffer.clone_section_into_gpu_only_buffer(0, data.len() as DeviceSize, &mut gpu_buffer)?;
+        Ok(Self {
+            staging: staging_buffer,
             gpu_only: gpu_buffer,
             capacity,
             free_slots: vec![],
             pending_free_slots: Default::default(),
         })
     }
-
-
 
     //TODO handle reqeust to grow and compact near indexes in a ranges
     pub fn new(
@@ -595,8 +698,13 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
         usage: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
-        let staging = StagingBuffer::new(core.clone(), capacity * MAX_FRAMES_IN_FLIGHT , usage  | vk::BufferUsageFlags::TRANSFER_SRC, name)?; //TODO flags
-        let gpu_only = GpuOnlyBuffer::new::<T>(core.clone(), capacity, usage  | vk::BufferUsageFlags::TRANSFER_DST, name)?;
+        let staging = StagingBuffer::new(
+            core.clone(),
+            capacity * MAX_FRAMES_IN_FLIGHT,
+            usage | vk::BufferUsageFlags::TRANSFER_SRC ,
+            name,
+        )?; //TODO flags
+        let gpu_only = GpuOnlyBuffer::new::<T>(core.clone(), capacity, usage | vk::BufferUsageFlags::TRANSFER_DST, name)?;
 
         // Populate the free list with all available indices
         let free_slots = (0..capacity).rev().collect();
@@ -612,7 +720,7 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
 
     /// Frees an index so it can be reused by future allocations.
     pub fn free_index(&mut self, index: usize) {
-       let current_frame = *self.raw().core.absolute_frame_count.borrow() as u64;
+        let current_frame = *self.raw().core.absolute_frame_count.borrow() as u64;
         self.pending_free_slots.push_back((current_frame, index));
     }
 
@@ -627,9 +735,11 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
         }
     }
 
-
     pub fn inner_staging(&self) -> vk::Buffer {
         self.staging.inner()
+    }
+    fn usage_staging(&self) -> vk::BufferUsageFlags {
+        self.raw_staging().usage.clone()
     }
     pub fn raw_staging(&self) -> &RawBuffer {
         self.staging.raw()
@@ -652,14 +762,10 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
         let info = vk::BufferDeviceAddressInfo::default().buffer(self.staging.raw.buffer);
         unsafe { self.staging.raw.core.device().inner().get_buffer_device_address(&info) }
     }
-    
-
-
 
     /// Allocates a slot for new data. Returns the assigned index and the BufferCopy region
     /// that needs to be submitted to a CommandBuffer for GPU synchronization.
-    pub fn allocate_and_update(&mut self, data: &T  ) -> SrResult<usize> { //TODO this does not actually allocate or delegate correctly yet and with a vector of data
-
+    pub fn allocate_and_update(&mut self, data: &T) -> SrResult<(usize, vk::BufferCopy)> {
         let index = self
             .free_slots
             .pop()
@@ -667,7 +773,6 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
 
         let elements_per_frame = self.capacity;
         let frame_module = *self.raw().core.absolute_frame_count.borrow() % MAX_FRAMES_IN_FLIGHT;
-
         let staging_index = index + (elements_per_frame * frame_module);
 
         let mapped = self.staging.map_mut()?;
@@ -677,30 +782,66 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
         let dst_offset = (index as vk::DeviceSize) * size;
         let src_offset = (staging_index as vk::DeviceSize) * size;
 
-        let regions = [vk::BufferCopy::default().src_offset(src_offset).dst_offset(dst_offset).size(size)];
+        let copy_region = vk::BufferCopy::default()
+            .src_offset(src_offset)
+            .dst_offset(dst_offset)
+            .size(size);
 
-        //TODO temp one time allocation
-
-        let device = self.raw().core.device().inner();
-        let cmd_buf =
-            vulkan_abstraction::cmd_buffer::new_command_buffer(self.raw().core.graphics_cmd_pool(), self.raw().core.device().inner())?;
-
-        let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-        unsafe { device.begin_command_buffer(cmd_buf, &begin_info) }?;
+        Ok((index, copy_region))
+    }
+}
 
 
-        unsafe { device.cmd_copy_buffer(cmd_buf, self.inner_staging(), self.inner(), &regions) };
+/// Derives the appropriate pipeline stages and access flags for reading a buffer
+/// based on the usage flags it was created with.
+pub fn infer_read_masks_from_usage(
+    usage: vk::BufferUsageFlags,
+) -> (vk::PipelineStageFlags2, vk::AccessFlags2) {
+    let mut stage_mask = vk::PipelineStageFlags2::empty();
+    let mut access_mask = vk::AccessFlags2::empty();
 
-        unsafe { device.end_command_buffer(cmd_buf) }?;
-
-        self.raw().core.transfer_queue().submit_sync(cmd_buf)?;
-
-        unsafe { device.free_command_buffers(self.raw().core.graphics_cmd_pool().inner(), &[cmd_buf]) };
-
-
-        Ok(index)
+    if usage.contains(vk::BufferUsageFlags::VERTEX_BUFFER) {
+        stage_mask |= vk::PipelineStageFlags2::VERTEX_INPUT;
+        access_mask |= vk::AccessFlags2::VERTEX_ATTRIBUTE_READ;
     }
 
+    if usage.contains(vk::BufferUsageFlags::INDEX_BUFFER) {
+        stage_mask |= vk::PipelineStageFlags2::VERTEX_INPUT;
+        access_mask |= vk::AccessFlags2::INDEX_READ;
+    }
 
+    if usage.contains(vk::BufferUsageFlags::UNIFORM_BUFFER) {
+        // UBOs can be read in almost any shader stage
+        stage_mask |= vk::PipelineStageFlags2::ALL_GRAPHICS | vk::PipelineStageFlags2::COMPUTE_SHADER;
+        access_mask |= vk::AccessFlags2::UNIFORM_READ;
+    }
+
+    if usage.contains(vk::BufferUsageFlags::STORAGE_BUFFER) {
+        // SSBOs can be read in compute or graphics
+        stage_mask |= vk::PipelineStageFlags2::ALL_GRAPHICS | vk::PipelineStageFlags2::COMPUTE_SHADER;
+        access_mask |= vk::AccessFlags2::SHADER_READ;
+    }
+
+    if usage.contains(vk::BufferUsageFlags::INDIRECT_BUFFER) {
+        stage_mask |= vk::PipelineStageFlags2::DRAW_INDIRECT;
+        access_mask |= vk::AccessFlags2::INDIRECT_COMMAND_READ;
+    }
+
+    // Raytracing specific flags
+    if usage.contains(vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR) {
+        stage_mask |= vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR;
+        access_mask |= vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR;
+    }
+    if usage.contains(vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR) {
+        stage_mask |= vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR;
+        access_mask |= vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR;
+    }
+
+    // Fallback if somehow it's none of the above
+    if stage_mask.is_empty() {
+        stage_mask = vk::PipelineStageFlags2::ALL_COMMANDS;
+        access_mask = vk::AccessFlags2::MEMORY_READ;
+    }
+
+    (stage_mask, access_mask)
 }

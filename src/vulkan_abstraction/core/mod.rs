@@ -8,11 +8,13 @@ pub use instance::*;
 use std::cell::{Ref, RefCell, RefMut};
 use std::ffi::CStr;
 use std::rc::Rc;
-
+use parking_lot::{Mutex, RawMutex};
 use crate::vulkan_abstraction;
 use crate::{CreateSurfaceFn, error::*};
 use ash::{khr, vk};
 use ash::vk::Semaphore;
+use parking_lot::lock_api::MutexGuard;
+use crate::vulkan_abstraction::Queue;
 
 #[rustfmt::skip]
 #[allow(unused)]
@@ -23,8 +25,8 @@ pub struct Core { //TODO core is completely single thread
     acceleration_structure_device: khr::acceleration_structure::Device,
     ray_tracing_pipeline_device: khr::ray_tracing_pipeline::Device,
     //queue needs mutability for .present()
-    graphics_queue: RefCell<vulkan_abstraction::Queue>,
-    transfer_queue: RefCell<vulkan_abstraction::Queue>,
+    graphics_queue: Mutex<vulkan_abstraction::Queue>,
+    transfer_queue: Mutex<vulkan_abstraction::Queue>,
     graphics_cmd_pool: vulkan_abstraction::CmdPool,
     transfer_cmd_pool: vulkan_abstraction::CmdPool,
 
@@ -102,18 +104,32 @@ impl Core {
         let graphics_queue = vulkan_abstraction::Queue::new(Rc::clone(&device), 0  ,device.graphics_queue_family_index()  )?;
 
 
-        let dedicated_transfer_queue;
-        let transfer_cmd_pool;
-        if let Some(queue_family) = device.transfer_queue_family_index() {
-            dedicated_transfer_queue = vulkan_abstraction::Queue::new(Rc::clone(&device),0  , queue_family)?;
-            transfer_cmd_pool = vulkan_abstraction::CmdPool::new(Rc::clone(&device), queue_family, vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)?;
-        }else {
-            dedicated_transfer_queue  = vulkan_abstraction::Queue::new(Rc::clone(&device),0 , device.graphics_queue_family_index() )?;
-            transfer_cmd_pool = vulkan_abstraction::CmdPool::new(Rc::clone(&device), device.graphics_queue_family_index(), vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)?;
-        }
+        let graphics_family = device.graphics_queue_family_index();
+        let (transfer_queue, transfer_cmd_pool) = if let Some(transfer_family) = device.transfer_queue_family_index() {
+            // Path A: dGPU (Dedicated Transfer Hardware)
+            let queue = vulkan_abstraction::Queue::new(Rc::clone(&device), 0, transfer_family)?;
+            let pool = vulkan_abstraction::CmdPool::new(
+                Rc::clone(&device),
+                transfer_family,
+                vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER
+            )?;
+            (queue, pool)
+        } else {
+            // Path B: iGPU Fallback (Aliasing the Graphics Queue)
+            let queue = vulkan_abstraction::Queue::new(Rc::clone(&device), 0, graphics_family)?;
+            let pool = vulkan_abstraction::CmdPool::new(
+                Rc::clone(&device),
+                graphics_family,
+                vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER
+            )?;
+            (queue, pool)
+        };
 
-        let graphics_cmd_pool = vulkan_abstraction::CmdPool::new(Rc::clone(&device), device.graphics_queue_family_index(), vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)?;
-
+        let graphics_cmd_pool = vulkan_abstraction::CmdPool::new(
+            Rc::clone(&device),
+            graphics_family,
+            vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER
+        )?;
 
 
         Ok((
@@ -125,8 +141,8 @@ impl Core {
                 allocator: RefCell::new(allocator),
                 acceleration_structure_device,
                 ray_tracing_pipeline_device,
-                graphics_queue: RefCell::new(graphics_queue),
-                transfer_queue: RefCell::new(dedicated_transfer_queue),
+                graphics_queue: parking_lot::Mutex::new(graphics_queue),
+                transfer_queue: parking_lot::Mutex::new(transfer_queue),
                 graphics_cmd_pool,
                 transfer_cmd_pool,
                 transfer_semaphores: RefCell::new(vec![]),
@@ -154,19 +170,14 @@ impl Core {
     pub fn rt_pipeline_device(&self) -> &khr::ray_tracing_pipeline::Device {
         &self.ray_tracing_pipeline_device
     }
-    pub fn graphics_queue(&self) -> Ref<'_, vulkan_abstraction::Queue> {
-        self.graphics_queue.borrow()
+    pub fn graphics_queue(&self) -> MutexGuard<'_, RawMutex, Queue> {
+        self.graphics_queue.lock()
     }
-    pub fn graphics_queue_mut(&self) -> RefMut<'_, vulkan_abstraction::Queue> {
-        self.graphics_queue.borrow_mut()
+ 
+    pub fn transfer_queue(&self) -> MutexGuard<'_, RawMutex, Queue> {
+        self.transfer_queue.lock()
     }
-    pub fn transfer_queue(&self) -> Ref<'_, vulkan_abstraction::Queue> {
-        self.transfer_queue.borrow()
-    }
-    pub fn transfer_queue_mut(&self) -> RefMut<'_, vulkan_abstraction::Queue> {
-        self.transfer_queue.borrow_mut()
-    }
-
+    
     pub fn allocator(&self) -> Ref<'_, Allocator> {
         self.allocator.borrow()
     }
@@ -215,7 +226,7 @@ impl Core {
 
         // 4. Invia alla Transfer Queue
         unsafe {
-            let queue = self.transfer_queue.borrow();
+            let queue = self.transfer_queue.lock();
             device.queue_submit(queue.inner(), &[submit_info], transfer_fence)?;
         }
 

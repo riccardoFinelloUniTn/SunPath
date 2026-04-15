@@ -17,6 +17,7 @@ let
     vulkan-loader
     vulkan-headers
     vulkan-validation-layers
+    vulkan-caps-viewer
   ];
 
   bpy-libs = with pkgs; [
