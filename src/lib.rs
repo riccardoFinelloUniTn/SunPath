@@ -149,7 +149,7 @@ impl Renderer {
 
         let mut instances_buffer = vulkan_abstraction::StagingBuffer::new(
             Rc::clone(&core),
-            MAX_TLAS_INSTANCES,
+            MAX_TLAS_INSTANCES as vk::DeviceSize,
             vk::BufferUsageFlags::STORAGE_BUFFER |
                 vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS |
                 vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,

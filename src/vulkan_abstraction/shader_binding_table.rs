@@ -55,7 +55,7 @@ impl ShaderBindingTable {
         }?;
 
         // Allocate a buffer for storing the SBT.
-        let sbt_buffer_size = (raygen_region.size + miss_region.size + hit_region.size + callable_region.size) as usize;
+        let sbt_buffer_size = (raygen_region.size + miss_region.size + hit_region.size + callable_region.size) as vk::DeviceSize;
         let mut sbt_buffer : vulkan_abstraction::StagingBuffer<u8>= vulkan_abstraction::StagingBuffer::new(
             Rc::clone(core),
             sbt_buffer_size,

@@ -38,7 +38,7 @@ impl IndexBuffer {
             idx_type,
         })
     }
-    pub fn new_for_blas<T>(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self>
+    pub fn new_for_blas<T>(core: Rc<vulkan_abstraction::Core>, len: vk::DeviceSize) -> SrResult<Self>
     where
         T: 'static,
     {
@@ -63,7 +63,7 @@ impl IndexBuffer {
             "index buffer for BLAS usage",
         )?;
 
-        Ok(Self { buffer, len, idx_type })
+        Ok(Self { buffer, len: len as usize, idx_type })
     }
     #[allow(dead_code)]
     pub fn buffer(&self) -> &GpuOnlyBuffer{
