@@ -45,7 +45,7 @@ impl Image {
             _ => todo!(), // TODO
         };
 
-        let staging_buffer = vulkan_abstraction::StagingBuffer::new_from_data(Rc::clone(&image.core), &image_data)?;
+        let staging_buffer = vulkan_abstraction::StagingBuffer::new_temp_from_data(Rc::clone(&image.core), &image_data)?;
 
         image.copy_from_buffer(&staging_buffer)?;
 

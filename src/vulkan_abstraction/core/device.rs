@@ -110,6 +110,9 @@ impl Device {
                 );
             }
 
+
+            let mut vk13_features = vk::PhysicalDeviceVulkan13Features::default()
+                .synchronization2(true);
             // enable some device features necessary for ray-tracing //TODO I may need some newer feature expecially for the semi-binding?
             let mut vk12_features = vk::PhysicalDeviceVulkan12Features::default()
                 .buffer_device_address(true) // necessary for ray-tracing
@@ -130,6 +133,7 @@ impl Device {
             let device_create_info = vk::DeviceCreateInfo::default()
                 .enabled_extension_names(&device_extensions)
                 .push_next(&mut vk12_features)
+                .push_next(&mut vk13_features)
                 .push_next(&mut physical_device_rt_pipeline_features)
                 .push_next(&mut physical_device_acceleration_structure_features)
                 .push_next(&mut physical_device_features)
