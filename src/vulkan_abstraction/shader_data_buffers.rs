@@ -175,14 +175,14 @@ impl ShaderDataBuffers {
             self.emissive_triangles_storage_buffer = vulkan_abstraction::GpuOnlyBuffer::new_from_data(
                 Rc::clone(&self.core),
                 &dummy,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
                 "emissive triangles dummy storage buffer",
             )?;
         } else {
             self.emissive_triangles_storage_buffer = vulkan_abstraction::GpuOnlyBuffer::new_from_data(
                 Rc::clone(&self.core),
                 emissive_triangles,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
                 "emissive triangles storage buffer",
             )?;
         }
@@ -275,7 +275,7 @@ impl ShaderDataBuffers {
         self.meshes_info_storage_buffer = vulkan_abstraction::ArenaIndexedWithRingStagingBuffer::new_into_gpu_from_data(
             Rc::clone(&self.core),
             &meshes_info_storage_buffer_contents,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
             "meshes info storage buffer",
         )?;
 
