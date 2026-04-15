@@ -663,25 +663,27 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
         if capacity == 0 {
             return Ok(Self::new_null(core));
         }
+        let byte_length = (data.len() * std::mem::size_of::<T>()) ;
+
         let staging_buffer = StagingBuffer::new_from_data_with_custom_length(
             Rc::clone(&core),
             data,
-            data.len() * MAX_FRAMES_IN_FLIGHT,
+            byte_length * MAX_FRAMES_IN_FLIGHT,
             buffer_usage_flags,
             name,
         )?;
         log::debug!(
             "New Gpu Buffer for Arena with these usage flags {:?}",
-            buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_DST
+            buffer_usage_flags| vk::BufferUsageFlags::TRANSFER_SRC  | vk::BufferUsageFlags::TRANSFER_DST
         );
         let mut gpu_buffer = GpuOnlyBuffer::new::<T>(
             core.clone(),
-            data.len(),
-            buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_DST,
+            byte_length,
+            buffer_usage_flags| vk::BufferUsageFlags::TRANSFER_SRC  | vk::BufferUsageFlags::TRANSFER_DST,
             name,
         )?;
 
-        staging_buffer.clone_section_into_gpu_only_buffer(0, data.len() as DeviceSize, &mut gpu_buffer)?;
+        staging_buffer.clone_section_into_gpu_only_buffer(0, byte_length as DeviceSize, &mut gpu_buffer)?;
         Ok(Self {
             staging: staging_buffer,
             gpu_only: gpu_buffer,
@@ -704,7 +706,7 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
             usage | vk::BufferUsageFlags::TRANSFER_SRC ,
             name,
         )?; //TODO flags
-        let gpu_only = GpuOnlyBuffer::new::<T>(core.clone(), capacity, usage | vk::BufferUsageFlags::TRANSFER_DST, name)?;
+        let gpu_only = GpuOnlyBuffer::new::<T>(core.clone(), capacity, usage| vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST, name)?;
 
         // Populate the free list with all available indices
         let free_slots = (0..capacity).rev().collect();
