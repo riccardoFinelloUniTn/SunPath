@@ -6,8 +6,8 @@ use crate::vulkan_abstraction::{Buffer, IndexBuffer, VertexBuffer};
 use ash::vk;
 use ash::vk::AccelerationStructureBuildRangeInfoKHR;
 
-pub struct BlasInstance<'a, V, I = u32> {
-    pub blas: &'a vulkan_abstraction::BLAS<V, I>,
+pub struct BlasInstance<'a,> {
+    pub blas: &'a vulkan_abstraction::BLAS,
     pub transform: vk::TransformMatrixKHR,
     pub blas_instance_index: u32, // contains the index of the instance, NOT of the blas, so we can fetch instance-specific information in the shader, by passing it as gl_InstanceCustomIndexEXT
 }
@@ -30,23 +30,23 @@ pub struct Dynamic {
 }
 
 // Bottom-Level Acceleration Structure
-pub struct BLAS<V, I = u32> {
+pub struct BLAS {
     blas: vulkan_abstraction::AccelerationStructure,
     #[allow(unused)]
-    vertex_buffer: vulkan_abstraction::VertexBuffer<V>,
+    vertex_buffer: vulkan_abstraction::VertexBuffer,
     #[allow(unused)]
-    index_buffer: vulkan_abstraction::IndexBuffer<I>,
+    index_buffer: vulkan_abstraction::IndexBuffer,
     #[allow(unused)]
     is_dirty: bool,
     pub state: BlasState,
 }
 //TODO for nopw it can only have one geometry per blas
-impl<V, I> BLAS<V, I> {
+impl BLAS {
     /// the vertex_buffer is assumed to have a vec3 position attribute as its first (not necessarily the only) attribute in memory
     pub fn new(
         core: Rc<vulkan_abstraction::Core>,
-        vertex_buffer: vulkan_abstraction::VertexBuffer<V>,
-        index_buffer: vulkan_abstraction::IndexBuffer<I>,
+        vertex_buffer: vulkan_abstraction::VertexBuffer,
+        index_buffer: vulkan_abstraction::IndexBuffer,
         fast_build: bool,
     ) -> SrResult<Self> {
         /*
@@ -85,7 +85,7 @@ impl<V, I> BLAS<V, I> {
 
 
 
-    fn make_geometry<'a>(vertex_buffer: &VertexBuffer<V>, index_buffer: &IndexBuffer<I>) -> vk::AccelerationStructureGeometryKHR<'a> {
+    fn make_geometry<'a>(vertex_buffer: &VertexBuffer, index_buffer: &IndexBuffer) -> vk::AccelerationStructureGeometryKHR<'a> {
         let geometry_data = vk::AccelerationStructureGeometryDataKHR {
             triangles: vk::AccelerationStructureGeometryTrianglesDataKHR::default()
                 .vertex_data(vk::DeviceOrHostAddressConstKHR {
@@ -109,8 +109,8 @@ impl<V, I> BLAS<V, I> {
     #[allow(unused)]
     pub fn rebuild(
         &mut self,
-        vertex_buffer: vulkan_abstraction::VertexBuffer<V>,
-        index_buffer: vulkan_abstraction::IndexBuffer<I>,
+        vertex_buffer: vulkan_abstraction::VertexBuffer,
+        index_buffer: vulkan_abstraction::IndexBuffer,
         fast_build: bool,
     ) -> SrResult<()> {
 
@@ -124,7 +124,7 @@ impl<V, I> BLAS<V, I> {
         Ok(())
     }
 
-    fn make_build_range_info(index_buffer: &IndexBuffer<I>) -> AccelerationStructureBuildRangeInfoKHR {
+    fn make_build_range_info(index_buffer: &IndexBuffer) -> AccelerationStructureBuildRangeInfoKHR {
 
         let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR::default()
             // the value of first_vertex is added to index values before fetching verts
@@ -139,8 +139,8 @@ impl<V, I> BLAS<V, I> {
     }
 
     #[allow(unused)]
-    pub fn update(&mut self,  vertex_buffer: vulkan_abstraction::VertexBuffer<V>,
-                  index_buffer: vulkan_abstraction::IndexBuffer<I>, ) -> SrResult<()> {
+    pub fn update(&mut self, vertex_buffer: vulkan_abstraction::VertexBuffer,
+                  index_buffer: vulkan_abstraction::IndexBuffer, ) -> SrResult<()> {
         if !self.blas.allow_update { return SrResult::Err(SrError::new_custom("The structure is not updatable".to_string())); }
 
         let geometry = Self::make_geometry(&vertex_buffer, &index_buffer);
@@ -157,11 +157,11 @@ impl<V, I> BLAS<V, I> {
         self.blas.inner()
     }
 
-    pub fn vertex_buffer(&self) -> &vulkan_abstraction::VertexBuffer<V> {
+    pub fn vertex_buffer(&self) -> &vulkan_abstraction::VertexBuffer {
         &self.vertex_buffer
     }
 
-    pub fn index_buffer(&self) -> &vulkan_abstraction::IndexBuffer<I> {
+    pub fn index_buffer(&self) -> &vulkan_abstraction::IndexBuffer {
         &self.index_buffer
     }
 }

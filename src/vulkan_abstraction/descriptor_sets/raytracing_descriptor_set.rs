@@ -127,10 +127,10 @@ pub struct RaytracingDescriptorSets {
 }
 
 impl RaytracingDescriptorSets {
-    pub fn new<V, I>(
+    pub fn new(
         core: Rc<vulkan_abstraction::Core>,
         descriptor_set_layout: &RaytracingDescriptorSetLayout,
-        tlas: &TLAS<V, I>,
+        tlas: &TLAS,
         output_image: &vulkan_abstraction::Image,       // Changed from ImageView to Image
         depth_image: &vulkan_abstraction::Image,
         normal_image: &vulkan_abstraction::Image,

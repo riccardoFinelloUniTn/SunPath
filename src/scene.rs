@@ -30,10 +30,10 @@ impl Scene {
     pub fn load_into_gpu<'a>(
         &self,
         core: &Rc<vulkan_abstraction::Core>,
-        blases: &'a mut Vec<vulkan_abstraction::BLAS<vulkan_abstraction::gltf::Vertex>>,
+        blases: &'a mut Vec<vulkan_abstraction::BLAS>,
         mut scene_data: crate::SceneData,
     ) -> SrResult<(
-        Vec<vulkan_abstraction::BlasInstance<'a, vulkan_abstraction::gltf::Vertex, u32>>,
+        Vec<vulkan_abstraction::BlasInstance<'a>>,
         Vec<vulkan_abstraction::gltf::Material>,
         Vec<vulkan_abstraction::gltf::Texture>,
         Vec<vulkan_abstraction::image::Sampler>,
@@ -102,11 +102,12 @@ impl Scene {
         ))
     }
 
-    pub fn update_gpu_data<'a>( //TODO questa non va bene bisogna stare attenti agli indici per l'arena allocation 
+    pub fn update_gpu_data<'a>(
+        //TODO questa non va bene bisogna stare attenti agli indici per l'arena allocation
         &self,
         core: &Rc<vulkan_abstraction::Core>,
-        blases: &'a mut Vec<vulkan_abstraction::BLAS<vulkan_abstraction::gltf::Vertex>>,
-        blases_instances : &'a mut Vec<vulkan_abstraction::BlasInstance<'a, vulkan_abstraction::gltf::Vertex, u32>>,
+        blases: &'a mut Vec<vulkan_abstraction::BLAS>,
+        blases_instances: &'a mut Vec<vulkan_abstraction::BlasInstance<'a>>,
         mut scene_data: crate::SceneData,
     ) -> SrResult<(
         Vec<vulkan_abstraction::gltf::Material>,
@@ -115,8 +116,6 @@ impl Scene {
         Vec<vulkan_abstraction::Image>,
         Vec<vulkan_abstraction::gltf::EmissiveTriangle>,
     )> {
-        
-
         let mut blas_instances_info = vec![];
         let mut materials = vec![];
         let mut emissive_triangles = vec![];
@@ -135,17 +134,19 @@ impl Scene {
             )?;
         }
 
-        blases_instances.append(&mut blas_instances_info
-            .into_iter()
-            .enumerate()
-            .map(
-                |( blas_instance_index, (blas_index, transform))| vulkan_abstraction::BlasInstance {
-                    blas_instance_index:( blas_instance_index + blases_instances.len()  ) as u32,
-                    blas: &blases[blas_index],
-                    transform: to_vk_transform(transform),
-                },
-            )
-            .collect::<Vec<_>>());
+        blases_instances.append(
+            &mut blas_instances_info
+                .into_iter()
+                .enumerate()
+                .map(
+                    |(blas_instance_index, (blas_index, transform))| vulkan_abstraction::BlasInstance {
+                        blas_instance_index: (blas_instance_index + blases_instances.len()) as u32,
+                        blas: &blases[blas_index],
+                        transform: to_vk_transform(transform),
+                    },
+                )
+                .collect::<Vec<_>>(),
+        );
 
         let samplers: Result<Vec<_>, _> = scene_data
             .samplers
@@ -167,20 +168,14 @@ impl Scene {
 
         let images: Result<Vec<_>, _> = scene_data.images.into_iter().map(|image| to_vk_image(core, image)).collect();
 
-        Ok((
-            materials,
-            scene_data.textures,
-            samplers?,
-            images?,
-            emissive_triangles,
-        ))
+        Ok((materials, scene_data.textures, samplers?, images?, emissive_triangles))
     }
 
     fn explore_node(
         &self,
         node: &vulkan_abstraction::gltf::Node,
         core: &Rc<vulkan_abstraction::Core>,
-        blases: &mut Vec<vulkan_abstraction::BLAS<vulkan_abstraction::gltf::Vertex>>,
+        blases: &mut Vec<vulkan_abstraction::BLAS>,
         blas_instances_info: &mut Vec<BlasInstanceInfo>,
         primitives_blas_index: &mut HashMap<vulkan_abstraction::gltf::PrimitiveUniqueKey, usize>,
         materials: &mut Vec<vulkan_abstraction::gltf::Material>,

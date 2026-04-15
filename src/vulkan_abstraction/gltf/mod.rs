@@ -66,17 +66,17 @@ impl Gltf {
         })
     }
 
-    pub fn create_default_scene<T,Y>(&self) -> SrResult<(crate::Scene, crate::SceneData<T,Y>)> {
+    pub fn create_default_scene(&self) -> SrResult<(crate::Scene, crate::SceneData)> {
         // find the defualt scene index
         let default_scene_index = match self.document.default_scene() {
             Some(s) => s.index(),
             None => 0,
         };
 
-        self.create_scene::<T, Y>(default_scene_index)
+        self.create_scene(default_scene_index)
     }
 
-    pub fn create_scene<T,Y>(&self, scene_index: usize) -> SrResult<(crate::Scene, crate::SceneData<T,Y>)> {
+    pub fn create_scene(&self, scene_index: usize) -> SrResult<(crate::Scene, crate::SceneData)> {
         let gltf_scene = match self.document.scenes().enumerate().find(|(index, _)| *index == scene_index) {
             Some((_, scene)) => scene,
             None => {
@@ -119,7 +119,7 @@ impl Gltf {
             .collect::<Vec<_>>();
 
         let mut nodes: Vec<Node> = vec![];
-        let mut primitive_data_map: PrimitiveDataMap<T, Y> = PrimitiveDataMap::new();
+        let mut primitive_data_map: PrimitiveDataMap = PrimitiveDataMap::new();
         for gltf_node in gltf_scene.nodes() {
             // the root nodes do not have a parent transform to apply
             let transform = na::Matrix4::identity();
@@ -138,11 +138,11 @@ impl Gltf {
         Ok((scene, scene_data))
     }
 
-    fn explore<T,Y>(
+    fn explore(
         &self,
         gltf_node: &gltf::Node,
         parent_transform: na::Matrix4<f32>,
-        primitive_data_map: &mut PrimitiveDataMap<T,Y>,
+        primitive_data_map: &mut PrimitiveDataMap,
     ) -> SrResult<vulkan_abstraction::gltf::Node> {
         let (transform, mesh) = self.process_node(gltf_node, parent_transform, primitive_data_map)?;
 
@@ -161,11 +161,11 @@ impl Gltf {
         Ok(vulkan_abstraction::gltf::Node::new(transform, mesh, children)?)
     }
 
-    fn process_node<T,Y>(
+    fn process_node(
         &self,
         gltf_node: &gltf::Node,
         parent_transform: na::Matrix4<f32>,
-        primitive_data_map: &mut PrimitiveDataMap<T,Y>,
+        primitive_data_map: &mut PrimitiveDataMap,
     ) -> SrResult<(na::Matrix4<f32>, Option<vulkan_abstraction::gltf::Mesh>)> {
         // the trasnform can also be given decomposed in: translation, rotation and scale
         // but the gltf crate takes care of this:
@@ -189,10 +189,10 @@ impl Gltf {
         Ok((transform, mesh))
     }
 
-    fn process_mesh<T,Y>(
+    fn process_mesh(
         &self,
         gltf_mesh: gltf::Mesh,
-        primitive_data_map: &mut PrimitiveDataMap<T,Y>,
+        primitive_data_map: &mut PrimitiveDataMap,
     ) -> SrResult<vulkan_abstraction::gltf::Mesh> {
         let mut primitives = vec![];
 

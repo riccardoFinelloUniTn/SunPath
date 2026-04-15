@@ -3,8 +3,8 @@ use crate::vulkan_abstraction;
 pub type PrimitiveUniqueKey = (usize, usize);
 
 pub struct PrimitiveData {
-    pub vertex_buffer: vulkan_abstraction::VertexBuffer<vulkan_abstraction::gltf::Vertex>,
-    pub index_buffer: vulkan_abstraction::IndexBuffer<u32>,
+    pub vertex_buffer: vulkan_abstraction::VertexBuffer,
+    pub index_buffer: vulkan_abstraction::IndexBuffer,
 }
 
 pub struct Primitive {
