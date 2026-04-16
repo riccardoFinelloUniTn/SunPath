@@ -701,7 +701,8 @@ impl Renderer {
 
         // Upload the struct to the uniform buffer
         self.shader_data_buffers.set_matrices(matrices)?;
-
+        
+        
         // Save the current frame's matrix to use as history NEXT frame
         self.prev_view_proj = tmp;
 

@@ -3,8 +3,8 @@ use std::rc::Rc;
 use ash::vk;
 use nalgebra as na;
 
+use crate::vulkan_abstraction::{Buffer, HostAccessibleBuffer};
 use crate::{CameraMatrices, error::SrResult, vulkan_abstraction};
-use crate::vulkan_abstraction::Buffer;
 
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
@@ -72,7 +72,7 @@ impl From<&vulkan_abstraction::gltf::Material> for Material {
                 material.emissive_factor[0],
                 material.emissive_factor[1],
                 material.emissive_factor[2],
-                material.emissive_strength
+                material.emissive_strength,
             ],
             emissive_texture_index: to_texture_index(material.emissive_texture_index),
 
@@ -80,7 +80,7 @@ impl From<&vulkan_abstraction::gltf::Material> for Material {
             alpha_cutoff: 0.0,
             transmission_factor: material.transmission_factor,
             ior: material.ior,
-            _end_padding: [0;3],
+            _end_padding: [0; 3],
             _padding: [0.0; 2],
         }
     }
@@ -109,10 +109,15 @@ impl ShaderDataBuffers {
 
     pub fn new_empty(core: Rc<vulkan_abstraction::Core>) -> SrResult<Self> {
         let matrices_uniform_buffer = vulkan_abstraction::UniformBuffer::new(Rc::clone(&core), 1 as vk::DeviceSize)?;
-
+        let meshes_info_storage_buffer = vulkan_abstraction::ArenaIndexedWithRingStagingBuffer::new(
+            core.clone(),
+            4096,
+            vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+            "Meshes info storage buffer",
+        )?;
         Ok(Self {
             matrices_uniform_buffer,
-            meshes_info_storage_buffer: vulkan_abstraction::Buffer::new_null(Rc::clone(&core)),
+            meshes_info_storage_buffer,
             emissive_triangles_storage_buffer: vulkan_abstraction::Buffer::new_null(Rc::clone(&core)),
             textures: Vec::new(),
             core,
@@ -125,21 +130,20 @@ impl ShaderDataBuffers {
             view_inverse,
             proj_inverse,
             view_proj,
-            prev_view_proj
+            prev_view_proj,
         }: CameraMatrices,
     ) -> SrResult<()> {
-
-        let mem = self.matrices_uniform_buffer.raw_mut().map_mut::<MatricesBufferContents>()?;
+        let mem = self.matrices_uniform_buffer.map_mut()?;
         mem[0] = MatricesBufferContents {
             view_inverse,
             proj_inverse,
             view_proj,
-            prev_view_proj
+            prev_view_proj,
         };
 
         Ok(())
     }
-    //TODO fix reallocation on update 
+    //TODO fix reallocation on update
     pub fn update(
         &mut self,
         blas_instances: &[vulkan_abstraction::BlasInstance],
@@ -151,19 +155,14 @@ impl ShaderDataBuffers {
         default_sampler: &vulkan_abstraction::Sampler,
         emissive_triangles: &[vulkan_abstraction::gltf::EmissiveTriangle],
     ) -> SrResult<()> {
-        self.create_meshes_info(blas_instances, materials)?;
+        self.add_meshes_info(blas_instances, materials)?;
         self.set_textures(images, samplers, textures, fallback, default_sampler);
         self.set_emissive_triangles(emissive_triangles)?;
 
         Ok(())
     }
 
-
-
-    fn set_emissive_triangles(
-        &mut self,
-        emissive_triangles: &[vulkan_abstraction::gltf::EmissiveTriangle],
-    ) -> SrResult<()> {
+    fn set_emissive_triangles(&mut self, emissive_triangles: &[vulkan_abstraction::gltf::EmissiveTriangle]) -> SrResult<()> {
         if emissive_triangles.is_empty() {
             //1-element dummy buffer of zeroes if there are no lights
             let dummy = [vulkan_abstraction::gltf::EmissiveTriangle {
@@ -189,7 +188,8 @@ impl ShaderDataBuffers {
         Ok(())
     }
 
-    pub fn add_meshes_info( //TODO this is the blocking impl
+    pub fn add_meshes_info(
+        //TODO this is the blocking impl
         &mut self,
         blas_instances: &[vulkan_abstraction::BlasInstance],
         materials: &[vulkan_abstraction::gltf::Material],
@@ -201,7 +201,7 @@ impl ShaderDataBuffers {
                 index_buffer: blas_instance.blas.index_buffer().get_device_address(),
                 material: Material::from(material),
             };
-            let (index, copy_buffer) = self.meshes_info_storage_buffer.allocate_and_update(&mesh_info)?;//TODO use the one for &[T]
+            let (index, copy_buffer) = self.meshes_info_storage_buffer.allocate_and_update(&mesh_info)?; //TODO use the one for &[T]
             copy_buffers.push(copy_buffer);
         }
         if copy_buffers.is_empty() {
@@ -213,8 +213,7 @@ impl ShaderDataBuffers {
         let cmd_pool = self.core.transfer_cmd_pool();
 
         let cmd_buf = vulkan_abstraction::cmd_buffer::new_command_buffer(cmd_pool, device)?;
-        let begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+        let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
         unsafe {
             device.begin_command_buffer(cmd_buf, &begin_info)?;
@@ -240,8 +239,7 @@ impl ShaderDataBuffers {
                 .offset(0)
                 .size(vk::WHOLE_SIZE); // You can be more granular here if you want
 
-            let dependency_info = vk::DependencyInfo::default()
-                .buffer_memory_barriers(std::slice::from_ref(&buffer_barrier));
+            let dependency_info = vk::DependencyInfo::default().buffer_memory_barriers(std::slice::from_ref(&buffer_barrier));
 
             device.cmd_pipeline_barrier2(cmd_buf, &dependency_info);
 
@@ -270,7 +268,7 @@ impl ShaderDataBuffers {
                 material: Material::from(material),
             })
             .collect::<Vec<_>>();
-                
+
         self.meshes_info_storage_buffer = vulkan_abstraction::ArenaIndexedWithRingStagingBuffer::new_into_gpu_from_data(
             Rc::clone(&self.core),
             &meshes_info_storage_buffer_contents,
