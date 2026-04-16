@@ -41,7 +41,8 @@ void main() {
     vec3 center_diffuse = texelFetch(diffuse_image, pixel_coords, 0).rgb;
 
     if(center_roughness < 0.1){
-        imageStore(spatial_output, pixel_coords, vec4(center_color * center_diffuse, 1.0));
+        imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0)); // Removed multiplication
+        return;
     }
 
 

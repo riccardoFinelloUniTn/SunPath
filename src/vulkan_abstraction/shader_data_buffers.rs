@@ -53,6 +53,12 @@ impl From<&vulkan_abstraction::gltf::Material> for Material {
                 None => Self::NULL_TEXTURE_INDEX,
             }
         };
+        let alpha_mode = match material.alpha_mode {
+            gltf::material::AlphaMode::Opaque => 0,
+            gltf::material::AlphaMode::Mask => 1,
+            gltf::material::AlphaMode::Blend => 2,
+        };
+
 
         Self {
             base_color_value: material.pbr_metallic_roughness_properties.base_color_factor,
@@ -75,8 +81,8 @@ impl From<&vulkan_abstraction::gltf::Material> for Material {
             ],
             emissive_texture_index: to_texture_index(material.emissive_texture_index),
 
-            alpha_mode: 0,
-            alpha_cutoff: 0.0,
+            alpha_mode,
+            alpha_cutoff: material.alpha_cutoff,
             transmission_factor: material.transmission_factor,
             ior: material.ior,
             _end_padding: [0;3],
@@ -249,4 +255,28 @@ impl ShaderDataBuffers {
     pub fn get_textures(&self) -> &[(vk::Sampler, vk::ImageView)] {
         &self.textures
     }
+}
+
+
+/// Represents a single light candidate reservoir for Spatiotemporal Reservoir Resampling (ReSTIR).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Reservoir {
+    /// The index of the winning light candidate in the emissive triangles array.
+    pub light_idx: u32,
+    pub _pad0: [u32; 3],        // std430 vec3 alignment forces offset to 16
+    
+    /// The exact 3D world position on the light source that was sampled.
+    pub light_pos: [f32; 3],
+    pub _pad1: f32,             // std430 vec3 alignment forces offset to 32
+
+    /// The 3D world normal of the light source at the sampled position.
+    pub light_normal: [f32; 3],
+    /// The sum of all candidate weights evaluated so far.
+    pub w_sum: f32,
+    /// The number of light candidates that have been processed to get this winner.
+    pub m: f32,
+    /// The final unbiased probabilistic weight of this reservoir, used to scale the final shadow ray.
+    pub w: f32,
+    pub _pad2: [u32; 2],        // Pad out to exactly 64 bytes total
 }

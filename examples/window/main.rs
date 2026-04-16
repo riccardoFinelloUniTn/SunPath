@@ -1,8 +1,9 @@
 use std::rc::Rc;
+use std::collections::HashSet;
+use std::time::Instant;
 
 use ash::vk;
 use nalgebra as na;
-use std::time::Instant;
 use sunray::{
     camera::Camera,
     error::{ErrorSource, SrResult},
@@ -10,10 +11,11 @@ use sunray::{
 };
 use winit::{
     application::ApplicationHandler,
-    event::WindowEvent,
+    event::{DeviceEvent, ElementState, MouseButton, WindowEvent},
     event_loop::{self, ControlFlow, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
     raw_window_handle_05::{HasRawDisplayHandle, HasRawWindowHandle},
-    window::Window,
+    window::{CursorGrabMode, Window},
 };
 
 mod surface;
@@ -33,23 +35,47 @@ struct AppResources {
     pub ready_to_present_sems: Vec<vulkan_abstraction::Semaphore>,
 }
 
-#[derive(Default)]
 struct App {
     window: Option<Window>,
     resources: Option<AppResources>,
-
 
     start_time: Option<std::time::SystemTime>,
     frame_count: u64,
     last_fps_check: Option<Instant>,
     frames_since_check: u32,
+
+    // --- CAMERA STATE ---
+    camera_pos: na::Point3<f32>,
+    camera_yaw: f32,
+    camera_pitch: f32,
+    keys_down: HashSet<KeyCode>,
+    mouse_captured: bool,
+    last_frame_time: Option<Instant>,
+}
+
+impl Default for App {
+    fn default() -> Self {
+        Self {
+            window: None,
+            resources: None,
+            start_time: None,
+            frame_count: 0,
+            last_fps_check: None,
+            frames_since_check: 0,
+
+            // Start looking down the -Z axis slightly above the floor
+            camera_pos: na::Point3::new(0.0, 2.0, 10.0),
+            camera_yaw: -std::f32::consts::FRAC_PI_2,
+            camera_pitch: 0.0,
+            keys_down: HashSet::new(),
+            mouse_captured: false,
+            last_frame_time: None,
+        }
+    }
 }
 
 /// The number of concurrent frames that are processed (both by CPU and GPU).
-///
-/// Apparently 2 is the most common choice. Empirically it seems like the performance doesn't really
-/// get any better with a higher number, but it does get measurably worse with only 1.
-const MAX_FRAMES_IN_FLIGHT: usize = 2;
+const MAX_FRAMES_IN_FLIGHT: usize = 4;
 
 impl App {
     fn build_resources(&mut self, size: (u32, u32)) -> SrResult<()> {
@@ -68,8 +94,7 @@ impl App {
         let (mut renderer, surface) =
             sunray::Renderer::new_with_surface(size, vk::Format::R8G8B8A8_SRGB, instance_exts, &create_surface)?;
 
-        // /heavy_models/Light_Tests
-        renderer.load_gltf("examples/assets/Room3.glb")?;
+        renderer.load_gltf("examples/assets/heavy_models/Room.glb")?;
 
         //take ownership of the surface
         let surface = surface::Surface::new(renderer.core().entry(), renderer.core().instance(), surface);
@@ -111,7 +136,6 @@ impl App {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        // img_acquired_sems & img_rendered_fences cannot be indexed by image index, since they are sent to gpu before an image index is acquired
         let img_acquired_sems = (0..MAX_FRAMES_IN_FLIGHT)
             .map(|_| vulkan_abstraction::Semaphore::new(Rc::clone(&core)))
             .collect::<Result<Vec<_>, _>>()?;
@@ -122,22 +146,6 @@ impl App {
             .iter()
             .map(|_| vulkan_abstraction::Semaphore::new(Rc::clone(&core)))
             .collect::<Result<Vec<_>, _>>()?;
-
-        let fmt_handles = |sems: &[vulkan_abstraction::Semaphore]| -> String {
-            if log::max_level() < log::LevelFilter::Debug {
-                return String::new();
-            }
-            let mut s = String::from("[ ");
-            for sem in sems.iter() {
-                s += &format!("{:#x?}, ", sem.inner());
-            }
-            s += "]";
-
-            s
-        };
-
-        log::debug!("img_acquired_sems: {}", fmt_handles(&img_acquired_sems));
-        log::debug!("ready_to_present_sems: {}", fmt_handles(&ready_to_present_sems));
 
         self.resources = Some(AppResources {
             swapchain,
@@ -155,7 +163,6 @@ impl App {
     fn resize(&mut self, size: (u32, u32)) -> SrResult<()> {
         self.res_mut().renderer.resize(size)?;
 
-        // necessary so we can create the swapchain with the correct extent
         self.res()
             .renderer
             .core()
@@ -168,8 +175,6 @@ impl App {
         if curr_size == new_size {
             return Ok(());
         }
-
-        log::debug!("resizing swapchain from {curr_size:?} to {new_size:?}");
 
         let core = Rc::clone(self.res().renderer.core());
 
@@ -217,14 +222,6 @@ impl App {
         Ok(())
     }
 
-    fn time_elapsed(&self) -> f32 {
-        std::time::SystemTime::now()
-            .duration_since(self.start_time.unwrap())
-            .unwrap()
-            .as_millis() as f32
-            / 1000.0
-    }
-
     fn acquire_next_image(&self, signal_sem: vk::Semaphore) -> SrResult<usize> {
         let image_index = {
             let (image_index, swapchain_suboptimal_for_surface) = unsafe {
@@ -263,24 +260,45 @@ impl App {
     }
 
     fn draw(&mut self) -> sunray::error::SrResult<()> {
-        // update frame data:
-        let time = self.time_elapsed();
+        let now = Instant::now();
+        let dt = if let Some(last) = self.last_frame_time {
+            now.duration_since(last).as_secs_f32()
+        } else {
+            0.016
+        };
+        self.last_frame_time = Some(now);
 
-        let y = 7.0;
-        let dist = 20.0;
+        // --- UPDATE CAMERA LOGIC ---
+        let base_speed = 3.0;
+        let speed = if self.keys_down.contains(&KeyCode::ShiftLeft) { base_speed * 3.0 } else { base_speed };
+        let move_dist = speed * dt;
 
+        let forward = na::Vector3::new(
+            self.camera_yaw.cos() * self.camera_pitch.cos(),
+            self.camera_pitch.sin(),
+            self.camera_yaw.sin() * self.camera_pitch.cos(),
+        ).normalize();
+
+        let right = forward.cross(&na::Vector3::new(0.0, 1.0, 0.0)).normalize();
+
+        if self.keys_down.contains(&KeyCode::KeyW) { self.camera_pos += forward * move_dist; }
+        if self.keys_down.contains(&KeyCode::KeyS) { self.camera_pos -= forward * move_dist; }
+        if self.keys_down.contains(&KeyCode::KeyD) { self.camera_pos += right * move_dist; }
+        if self.keys_down.contains(&KeyCode::KeyA) { self.camera_pos -= right * move_dist; }
+        if self.keys_down.contains(&KeyCode::Space) { self.camera_pos += na::Vector3::new(0.0, 1.0, 0.0) * move_dist; }
+        if self.keys_down.contains(&KeyCode::ControlLeft) { self.camera_pos -= na::Vector3::new(0.0, 1.0, 0.0) * move_dist; }
+
+        let target = self.camera_pos + forward;
 
         let camera = Camera::default()
-            //.set_position(na::Point3::new(0.0, y, dist))
-            .set_position(na::Point3::new((time * 0.5).sin() * 4.0, y + (time * 2.0).cos() * 2.0, dist -  (time * 0.6).cos() * 4.0))
-            //.set_position(na::Point3::new(dist * time.cos(), y, dist * time.sin()))
-            .set_target(na::Point3::new(0.0, y, 0.0))
+            .set_position(self.camera_pos)
+            .set_target(target)
             .set_fov_y(45.0);
+
         self.res_mut().renderer.set_camera(camera)?;
 
         let frame_index = self.frame_count as usize % MAX_FRAMES_IN_FLIGHT;
 
-        //acquire next image
         let img_acquired_sem = self.res().img_acquired_sems[frame_index].inner();
         let img_rendered_fence = self.res().img_rendered_fences[frame_index];
         vulkan_abstraction::wait_fence(self.res().renderer.core().device(), img_rendered_fence)?;
@@ -288,11 +306,9 @@ impl App {
 
         let swapchain_image = self.res().swapchain.images()[img_index];
 
-        //render
         self.res_mut().img_rendered_fences[frame_index] =
             self.res_mut().renderer.render_to_image(swapchain_image, img_acquired_sem)?;
 
-        // image barrier to transition to PRESENT_SRC
         let img_barrier_to_present_cmd_buf = &mut self.res_mut().img_barrier_to_present_cmd_bufs[img_index];
         let img_barrier_done_fence = img_barrier_to_present_cmd_buf.fence_mut().submit()?;
 
@@ -302,18 +318,13 @@ impl App {
         self.frames_since_check += 1;
 
         if let Some(last_check) = self.last_fps_check {
-            let now = Instant::now();
             let elapsed = now.duration_since(last_check);
 
-            // Update title every 1 second
             if elapsed.as_secs() >= 1 {
                 let fps = self.frames_since_check as f32 / elapsed.as_secs_f32();
-
                 if let Some(window) = &self.window {
                     window.set_title(&format!("Sunray Vulkan - FPS: {:.1}", fps));
                 }
-
-                // Reset counters
                 self.last_fps_check = Some(now);
                 self.frames_since_check = 0;
             }
@@ -327,7 +338,6 @@ impl App {
             img_barrier_done_fence,
         )?;
 
-        //present
         self.present(img_index, ready_to_present_sem)?;
 
         self.frame_count += 1;
@@ -340,13 +350,11 @@ impl App {
             WindowEvent::CloseRequested => {
                 let run_time = {
                     let end_time = std::time::SystemTime::now();
-
                     end_time.duration_since(self.start_time.unwrap()).unwrap().as_millis() as f32 / 1000.0
                 };
                 let fps = self.frame_count as f32 / run_time;
                 log::info!("Frames per second: {fps}");
                 unsafe { self.res().renderer.core().device().inner().device_wait_idle() }?;
-
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
@@ -355,7 +363,38 @@ impl App {
             }
             WindowEvent::Resized(size) => {
                 if size.width != 0 && size.height != 0 {
-                    self.resize(size.into()).unwrap(); // TODO: unwrap
+                    self.resize(size.into()).unwrap();
+                }
+            }
+            // --- KEYBOARD TRACKING & MOUSE LOCK EXIT ---
+            WindowEvent::KeyboardInput { event, .. } => {
+                if let PhysicalKey::Code(keycode) = event.physical_key {
+                    match event.state {
+                        ElementState::Pressed => {
+                            if keycode == KeyCode::Escape {
+                                self.mouse_captured = false;
+                                if let Some(window) = &self.window {
+                                    let _ = window.set_cursor_grab(CursorGrabMode::None);
+                                    window.set_cursor_visible(true);
+                                }
+                            } else {
+                                self.keys_down.insert(keycode);
+                            }
+                        }
+                        ElementState::Released => {
+                            self.keys_down.remove(&keycode);
+                        }
+                    }
+                }
+            }
+            // --- MOUSE LOCK ACTIVATION ---
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+                self.mouse_captured = true;
+                if let Some(window) = &self.window {
+                    // Confined works best on Windows, Locked works best on Mac/Linux. We fallback if one fails.
+                    let _ = window.set_cursor_grab(CursorGrabMode::Confined)
+                        .or_else(|_| window.set_cursor_grab(CursorGrabMode::Locked));
+                    window.set_cursor_visible(false);
                 }
             }
             _ => (),
@@ -364,19 +403,12 @@ impl App {
     }
 
     fn handle_srresult(&mut self, event_loop: &event_loop::ActiveEventLoop, result: SrResult<()>) {
-        match result {
-            Ok(()) => {}
-            Err(e) => {
-                match e.get_source() {
-                    ErrorSource::Vulkan(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
-                        log::warn!("{e}"); // we still warn because this isn't really the best behaviour
-                    }
-                    _ => {
-                        log::error!("{e}");
-
-                        event_loop.exit();
-                    }
-                }
+        if let Err(e) = result {
+            if let ErrorSource::Vulkan(vk::Result::ERROR_OUT_OF_DATE_KHR) = e.get_source() {
+                log::warn!("{e}");
+            } else {
+                log::error!("{e}");
+                event_loop.exit();
             }
         }
     }
@@ -393,12 +425,10 @@ impl App {
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &event_loop::ActiveEventLoop) {
         let window = event_loop.create_window(Window::default_attributes()).unwrap();
-
         let window_size = window.inner_size().into();
-
         self.window = Some(window);
 
-        if !self.resources.is_some() {
+        if self.resources.is_none() {
             let result = self.build_resources(window_size);
             self.handle_srresult(event_loop, result);
         }
@@ -409,6 +439,7 @@ impl ApplicationHandler for App {
         self.start_time = Some(std::time::SystemTime::now());
         self.last_fps_check = Some(Instant::now());
         self.frames_since_check = 0;
+        self.last_frame_time = Some(Instant::now());
     }
 
     fn window_event(
@@ -420,13 +451,32 @@ impl ApplicationHandler for App {
         let result = self.handle_event(event_loop, event);
         self.handle_srresult(event_loop, result);
     }
+
+    // --- RAW MOUSE MOTION TRACKING ---
+    fn device_event(
+        &mut self,
+        _event_loop: &event_loop::ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: DeviceEvent,
+    ) {
+        if self.mouse_captured {
+            if let DeviceEvent::MouseMotion { delta } = event {
+                let sensitivity = 0.002;
+                self.camera_yaw += delta.0 as f32 * sensitivity;
+                self.camera_pitch -= delta.1 as f32 * sensitivity;
+
+                // Clamp pitch so you don't break your neck looking backward through your legs
+                let limit = std::f32::consts::FRAC_PI_2 - 0.01;
+                self.camera_pitch = self.camera_pitch.clamp(-limit, limit);
+            }
+        }
+    }
 }
 
 fn main() {
     log4rs::config::init_file("examples/log4rs.yaml", log4rs::config::Deserializers::new()).unwrap();
 
     if cfg!(debug_assertions) {
-        //stdlib unfortunately completely pollutes trace log level, TODO somehow config stdlib/log to fix this?
         log::set_max_level(log::LevelFilter::Debug);
     } else {
         log::set_max_level(log::LevelFilter::Warn);

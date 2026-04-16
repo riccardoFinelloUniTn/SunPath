@@ -13,11 +13,11 @@ use std::{collections::HashMap, rc::Rc};
 use ash::vk;
 
 use crate::utils::env_var_as_bool;
-use crate::vulkan_abstraction::{DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets, PostprocessPass, TemporalPass};
+use crate::vulkan_abstraction::{DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets, PostprocessPass, Reservoir, TemporalPass};
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
 
-pub const DENOISE_PASSES: u32 = 4;
+pub const DENOISE_PASSES: u32 = 8;
 
 pub const EXPOSURE: f32 = 1.0;
 
@@ -36,6 +36,7 @@ struct ImageDependentData {
     diffuse_image: vulkan_abstraction::Image,
     #[allow(unused)]
     motion_vector_image: vulkan_abstraction::Image,
+
 
     #[allow(unused)]
     pub raytracing_descriptor_sets: vulkan_abstraction::RaytracingDescriptorSets,
@@ -59,9 +60,17 @@ pub struct Renderer {
 
     scene_images: Vec<vulkan_abstraction::Image>,
     scene_samplers: Vec<vulkan_abstraction::Sampler>,
+    reservoir_buffers: [vulkan_abstraction::Buffer; 2],
 
-    shader_binding_table: vulkan_abstraction::ShaderBindingTable,
-    ray_tracing_pipeline: vulkan_abstraction::RayTracingPipeline,
+    ///The first pipeline finds the best candidates for each pixel but doesn't trace many rays
+
+    ray_tracing_pipeline_ris: vulkan_abstraction::RayTracingPipeline,
+    shader_binding_table_ris: vulkan_abstraction::ShaderBindingTable,
+
+    ///The second raytacing pipeline traces the rays based on the reservoirs created during the first pass
+
+    ray_tracing_pipeline_final: vulkan_abstraction::RayTracingPipeline,
+    shader_binding_table_final: vulkan_abstraction::ShaderBindingTable,
 
     ray_tracing_descriptor_set_layout: vulkan_abstraction::RaytracingDescriptorSetLayout,
     temporal_accumulation_descriptor_set_layout: TemporalAccumulationDescriptorSetLayout,
@@ -71,8 +80,15 @@ pub struct Renderer {
     image_extent: vk::Extent3D,
     image_format: vk::Format,
 
+    ///The first pass after raytracing merges the previous frame on the next one to reduce bias
+
     temporal_accumulation_pipeline: vulkan_abstraction::ComputePipeline<TemporalPass>,
+
+    ///The denoise pass is run after the temporal accumulation to reduce noise even more (a-trous filter)
     denoise_pipeline: vulkan_abstraction::ComputePipeline<DenoisePass>,
+
+    ///An extra pass to handle post-processing like exposure and color correction. Should be mathematically easy to calculate
+
     postprocess_pipeline: vulkan_abstraction::ComputePipeline<PostprocessPass>,
 
     fallback_texture_image: vulkan_abstraction::Image,
@@ -139,11 +155,24 @@ impl Renderer {
         let denoise_descriptor_set_layout = vulkan_abstraction::DenoiseDescriptorSetLayout::new(Rc::clone(&core))?;
         let postprocess_descriptor_set_layout = PostprocessDescriptorSetLayout::new(Rc::clone(&core))?;
 
-        let ray_tracing_pipeline = vulkan_abstraction::RayTracingPipeline::new(
+        let ray_tracing_pipeline_ris = vulkan_abstraction::RayTracingPipeline::new(
             Rc::clone(&core),
             &ray_tracing_descriptor_set_layout,
             env_var_as_bool(ENABLE_SHADER_DEBUG_SYMBOLS_ENV_VAR).unwrap_or(IS_DEBUG_BUILD),
+            include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/ray_gen_ris.spirv"))
         )?;
+
+        let shader_binding_table_ris = vulkan_abstraction::ShaderBindingTable::new(&core, &ray_tracing_pipeline_ris)?;
+
+        let ray_tracing_pipeline_final = vulkan_abstraction::RayTracingPipeline::new(
+            Rc::clone(&core),
+            &ray_tracing_descriptor_set_layout,
+            env_var_as_bool(ENABLE_SHADER_DEBUG_SYMBOLS_ENV_VAR).unwrap_or(IS_DEBUG_BUILD),
+            include_bytes_align_as!(u32, concat!(env!("OUT_DIR"), "/ray_gen_final.spirv"))
+        )?;
+
+        let shader_binding_table_final = vulkan_abstraction::ShaderBindingTable::new(&core, &ray_tracing_pipeline_final)?;
+
 
         let temporal_accumulation_pipeline = vulkan_abstraction::ComputePipeline::<TemporalPass>::new(
             Rc::clone(&core),
@@ -160,7 +189,7 @@ impl Renderer {
             postprocess_descriptor_set_layout.inner(),
         )?;
 
-        let shader_binding_table = vulkan_abstraction::ShaderBindingTable::new(&core, &ray_tracing_pipeline)?;
+
 
         let image_dependant_data = HashMap::new();
 
@@ -185,6 +214,24 @@ impl Renderer {
             create_accum_image("Denoise_Ping")?,
             create_accum_image("Denoise_Pong")?,
         ];
+
+        let num_pixels = (image_extent.width * image_extent.height) as usize;
+        let reservoir_buffer_a = vulkan_abstraction::Buffer::new::<Reservoir>(
+            Rc::clone(&core),
+            num_pixels,
+            gpu_allocator::MemoryLocation::GpuOnly,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            "ReSTIR Reservoir Buffer A"
+        )?;
+
+        let reservoir_buffer_b = vulkan_abstraction::Buffer::new::<Reservoir>(
+            Rc::clone(&core),
+            num_pixels,
+            gpu_allocator::MemoryLocation::GpuOnly,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            "ReSTIR Reservoir Buffer B"
+        )?;
+        let reservoir_buffers = [reservoir_buffer_a, reservoir_buffer_b];
 
         let blue_noise_bytes = include_bytes!("../src/util_files/noise.png");
         let blue_noise_img = image::load_from_memory(blue_noise_bytes).unwrap().to_rgba8();
@@ -268,8 +315,13 @@ impl Renderer {
             Self {
                 image_dependant_data,
 
-                shader_binding_table,
-                ray_tracing_pipeline,
+                reservoir_buffers,
+
+                shader_binding_table_ris,
+                ray_tracing_pipeline_ris,
+                shader_binding_table_final,
+                ray_tracing_pipeline_final,
+
                 ray_tracing_descriptor_set_layout,
                 temporal_accumulation_descriptor_set_layout,
                 denoise_descriptor_set_layout,
@@ -313,6 +365,26 @@ impl Renderer {
             return Ok(());
         }
         self.clear_image_dependent_data();
+
+        let num_pixels = (new_extent.width * new_extent.height) as usize;
+        let reservoir_buffer_a = vulkan_abstraction::Buffer::new::<Reservoir>(
+            self.core.clone(),
+            num_pixels,
+            gpu_allocator::MemoryLocation::GpuOnly,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            "ReSTIR Reservoir Buffer A"
+        )?;
+
+        let reservoir_buffer_b = vulkan_abstraction::Buffer::new::<Reservoir>(
+            self.core.clone(),
+            num_pixels,
+            gpu_allocator::MemoryLocation::GpuOnly,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            "ReSTIR Reservoir Buffer B"
+        )?;
+
+        self.reservoir_buffers = [reservoir_buffer_a, reservoir_buffer_b];
+
         self.image_extent = new_extent;
 
         let create_accum_image = |name: &'static str| -> SrResult<vulkan_abstraction::Image> {
@@ -555,7 +627,9 @@ impl Renderer {
                 &motion_vector_image,   // G-Buffer Motion
                 &self.blue_noise_image,
                 self.blue_noise_sampler.inner(),
+                &self.reservoir_buffers,
                 &self.shader_data_buffers,
+
             )?;
 
             let temporal_accumulation_descriptor_sets = vulkan_abstraction::TemporalAccumulationDescriptorSets::new(
@@ -694,6 +768,7 @@ impl Renderer {
     /// that will be signaled when the rendering is finished (which can be used to know when the Semaphore has no pending operations left).
     pub fn render_to_image(&mut self, dst_image: vk::Image, wait_sem: vk::Semaphore) -> SrResult<vk::Fence> {
 
+        unsafe { self.core.device().inner().device_wait_idle().unwrap(); }
 
         if !self.image_dependant_data.contains_key(&dst_image) {
             self.build_image_dependent_data(&[dst_image])?;
@@ -926,32 +1001,27 @@ impl Renderer {
         image: vk::Image,
         extent: vk::Extent3D,
     ) -> SrResult<()> {
-
         let device = self.core.device().inner();
 
-        //ping pong to avoid errors when using accumulation images
         let history_idx = (self.frame_count % 2) as usize;
         let accum_idx = ((self.frame_count + 1) % 2) as usize;
 
-
-        // Use GENERAL for everything to rule out layout mismatches
-        let (old_layout, src_stage, src_access) = if self.frame_count == 0 {
-            (vk::ImageLayout::UNDEFINED, vk::PipelineStageFlags::TOP_OF_PIPE, vk::AccessFlags::empty())
-        } else {
-            (vk::ImageLayout::GENERAL, vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR, vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::SHADER_READ)
-        };
-
-        // Initializing push constant values
         let push_constants = vulkan_abstraction::RaytracingPushConstant {
             frame_count: self.frame_count,
             use_srgb: self.image_format == vk::Format::R8G8B8A8_SRGB,
             _padding: [0; 3],
         };
 
+        // Extract the bytes once to reuse for both pipelines
+        let push_constant_bytes = unsafe {
+            std::mem::transmute::<
+                vulkan_abstraction::RaytracingPushConstant,
+                [u8; std::mem::size_of::<vulkan_abstraction::RaytracingPushConstant>()],
+            >(push_constants)
+        };
 
         self.frame_count += 1;
         unsafe {
-
             let subresource_range = vk::ImageSubresourceRange::default()
                 .aspect_mask(vk::ImageAspectFlags::COLOR)
                 .base_mip_level(0)
@@ -971,7 +1041,6 @@ impl Renderer {
                     .subresource_range(subresource_range)
             };
 
-            // Barrier 1: Swapchain
             let b_swap = make_barrier(
                 image,
                 vk::ImageLayout::UNDEFINED,
@@ -986,7 +1055,6 @@ impl Renderer {
                 (vk::ImageLayout::GENERAL, vk::AccessFlags::SHADER_WRITE)
             };
 
-            // Barrier 2: History (Targeting GENERAL)
             let b_hist = make_barrier(
                 self.accumulation_images[history_idx].inner(),
                 hist_old,
@@ -1001,7 +1069,6 @@ impl Renderer {
                 (vk::ImageLayout::GENERAL, vk::AccessFlags::SHADER_READ)
             };
 
-            // Barrier 3: Accum (Targeting GENERAL)
             let b_accum = make_barrier(
                 self.accumulation_images[accum_idx].inner(),
                 accum_old,
@@ -1012,7 +1079,6 @@ impl Renderer {
 
             device.cmd_pipeline_barrier(
                 cmd_buf,
-                // Frame 1: Wait for nothing. Frame 2+: Wait for previous Ray Tracing.
                 if self.frame_count == 1 { vk::PipelineStageFlags::TOP_OF_PIPE } else { vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR },
                 vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
                 vk::DependencyFlags::empty(),
@@ -1021,39 +1087,87 @@ impl Renderer {
                 &[b_swap, b_hist, b_accum],
             );
 
-
+            // --- PASS 1: RIS Audition ---
             device.cmd_bind_pipeline(
                 cmd_buf,
                 vk::PipelineBindPoint::RAY_TRACING_KHR,
-                self.ray_tracing_pipeline.inner(),
+                self.ray_tracing_pipeline_ris.inner(),
             );
+
             device.cmd_bind_descriptor_sets(
                 cmd_buf,
                 vk::PipelineBindPoint::RAY_TRACING_KHR,
-                self.ray_tracing_pipeline.layout(),
+                self.ray_tracing_pipeline_ris.layout(),
                 0,
                 descriptor_sets.inner(),
                 &[],
             );
+
             device.cmd_push_constants(
                 cmd_buf,
-                self.ray_tracing_pipeline.layout(),
-                vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::MISS_KHR,
+                self.ray_tracing_pipeline_ris.layout(),
+                vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::MISS_KHR| vk::ShaderStageFlags::ANY_HIT_KHR,
                 0,
-                &std::mem::transmute::<
-                    vulkan_abstraction::RaytracingPushConstant,
-                    [u8; std::mem::size_of::<vulkan_abstraction::RaytracingPushConstant>()],
-                >(push_constants), //TODO: comment this transmute
+                &push_constant_bytes,
             );
+
             self.core.rt_pipeline_device().cmd_trace_rays(
                 cmd_buf,
-                self.shader_binding_table.raygen_region(),
-                self.shader_binding_table.miss_region(),
-                self.shader_binding_table.hit_region(),
-                self.shader_binding_table.callable_region(),
+                self.shader_binding_table_ris.raygen_region(),
+                self.shader_binding_table_ris.miss_region(),
+                self.shader_binding_table_ris.hit_region(),
+                self.shader_binding_table_ris.callable_region(),
                 extent.width,
                 extent.height,
-                extent.depth, //for now it's one because of the Extent2D.into()
+                extent.depth,
+            );
+
+            let reservoir_barrier = vk::MemoryBarrier::default()
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ);
+
+            device.cmd_pipeline_barrier(
+                cmd_buf,
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                vk::DependencyFlags::empty(),
+                &[reservoir_barrier],
+                &[],
+                &[],
+            );
+
+            device.cmd_bind_pipeline(
+                cmd_buf,
+                vk::PipelineBindPoint::RAY_TRACING_KHR,
+                self.ray_tracing_pipeline_final.inner(),
+            );
+
+            device.cmd_bind_descriptor_sets(
+                cmd_buf,
+                vk::PipelineBindPoint::RAY_TRACING_KHR,
+                self.ray_tracing_pipeline_final.layout(),
+                0,
+                descriptor_sets.inner(),
+                &[],
+            );
+
+            device.cmd_push_constants(
+                cmd_buf,
+                self.ray_tracing_pipeline_final.layout(),
+                vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::MISS_KHR| vk::ShaderStageFlags::ANY_HIT_KHR,
+                0,
+                &push_constant_bytes,
+            );
+
+            self.core.rt_pipeline_device().cmd_trace_rays(
+                cmd_buf,
+                self.shader_binding_table_final.raygen_region(),
+                self.shader_binding_table_final.miss_region(),
+                self.shader_binding_table_final.hit_region(),
+                self.shader_binding_table_final.callable_region(),
+                extent.width,
+                extent.height,
+                extent.depth,
             );
         }
 

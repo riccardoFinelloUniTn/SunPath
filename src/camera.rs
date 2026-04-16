@@ -44,10 +44,12 @@ impl Camera {
         );
 
         let view_homogeneous = view.to_homogeneous();
-        let proj_homogeneous = projection.to_homogeneous();
+        let mut proj_homogeneous = projection.to_homogeneous();
 
-        let view_inverse = view.to_homogeneous().try_inverse().unwrap(); //view_space -> world_space
-        let proj_inverse = projection.to_homogeneous().try_inverse().unwrap(); //clip_space -> view_space
+        proj_homogeneous[(1, 1)] *= -1.0;
+
+        let view_inverse = view_homogeneous.try_inverse().unwrap();
+        let proj_inverse = proj_homogeneous.try_inverse().unwrap();
         let view_proj = proj_homogeneous * view_homogeneous;
 
         CameraMatrices {
