@@ -1,0 +1,14 @@
+use ash::vk;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct EntityId(pub u64);
+
+pub struct Entity {
+    pub id: EntityId,
+    /// Index into Renderer's blases vec (shared geometry).
+    pub blas_index: usize,
+    /// Physical slot in the meshes_info arena buffer (= gl_InstanceCustomIndexEXT).
+    pub arena_slot: usize,
+    /// Instance transform (3x4 row-major, as Vulkan expects for ray tracing).
+    pub transform: vk::TransformMatrixKHR,
+}
