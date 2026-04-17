@@ -2,8 +2,8 @@ use std::{any::TypeId, ops::Deref, rc::Rc};
 
 use ash::vk;
 
-use crate::vulkan_abstraction::buffer::Buffer;
 use crate::vulkan_abstraction::GpuOnlyBuffer;
+use crate::vulkan_abstraction::buffer::Buffer;
 use crate::{error::*, vulkan_abstraction};
 
 pub struct IndexBuffer {
@@ -56,17 +56,16 @@ impl IndexBuffer {
             }
         };
 
-        let buffer = GpuOnlyBuffer::new::<T>(
-            core,
-            len,
-            usage_flags,
-            "index buffer for BLAS usage",
-        )?;
+        let buffer = GpuOnlyBuffer::new::<T>(core, len, usage_flags, "index buffer for BLAS usage")?;
 
-        Ok(Self { buffer, len: len as usize, idx_type })
+        Ok(Self {
+            buffer,
+            len: len as usize,
+            idx_type,
+        })
     }
     #[allow(dead_code)]
-    pub fn buffer(&self) -> &GpuOnlyBuffer{
+    pub fn buffer(&self) -> &GpuOnlyBuffer {
         &self.buffer
     }
     pub fn len(&self) -> usize {

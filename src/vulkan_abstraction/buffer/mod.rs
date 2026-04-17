@@ -1,8 +1,10 @@
+pub mod arena_keyed;
 pub mod index_buffer;
 pub mod vertex_buffer;
 
 use std::collections::VecDeque;
 //why use and not just mod?
+pub use arena_keyed::*;
 pub use index_buffer::*;
 use std::marker::PhantomData;
 pub use vertex_buffer::*;
@@ -14,7 +16,7 @@ use ash::vk::{BufferUsageFlags, BufferUsageFlags2KHR, DeviceAddress, DeviceSize,
 use log::{error, info};
 use std::rc::Rc;
 //TODO divide into a trait gpuonly and hostmemoery accessible and then do custom new functions with custom flags by leveraging strong typing
-
+//TODO capacity needs to be DeviceSize
 pub fn get_memory_type_index(
     core: &vulkan_abstraction::Core,
     mem_prop_flags: vk::MemoryPropertyFlags,
@@ -44,7 +46,7 @@ pub fn get_memory_type_index(
 pub trait Buffer {
     fn inner(&self) -> vk::Buffer;
 
-    fn usage(&self) -> BufferUsageFlags ;
+    fn usage(&self) -> BufferUsageFlags;
 
     fn raw(&self) -> &vulkan_abstraction::RawBuffer;
 
@@ -126,13 +128,12 @@ impl RawBuffer {
 
         unsafe { device.bind_buffer_memory(buffer, allocation.memory(), allocation.offset()) }?;
 
-
         Ok(Self {
             core,
             buffer,
             allocation,
             byte_size,
-            usage : buffer_usage_flags,
+            usage: buffer_usage_flags,
         })
     }
 
@@ -142,7 +143,7 @@ impl RawBuffer {
             buffer: vk::Buffer::null(),
             allocation: gpu_allocator::vulkan::Allocation::default(),
             byte_size: 0,
-            usage : BufferUsageFlags::empty()
+            usage: BufferUsageFlags::empty(),
         }
     }
 
@@ -441,9 +442,9 @@ impl<T> StagingBuffer<T> {
             .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
             .dst_stage_mask(dst_stage_mask)
             .dst_access_mask(dst_access_mask)
-            .buffer(dst.inner())           // ✅ Fixed!
-            .offset(0)                     // ✅ Granular: only barrier what we copied
-            .size(src_section_length);     // ✅ Granular: only barrier what we copied
+            .buffer(dst.inner()) // ✅ Fixed!
+            .offset(0) // ✅ Granular: only barrier what we copied
+            .size(src_section_length); // ✅ Granular: only barrier what we copied
 
         let dependency_info = vk::DependencyInfo::default().buffer_memory_barriers(std::slice::from_ref(&buffer_barrier));
 
@@ -534,7 +535,6 @@ impl GpuOnlyBuffer {
         usage: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
-
         let byte_size = len * std::mem::size_of::<T>() as vk::DeviceSize;
         let raw = RawBuffer::new_aligned(
             core,
@@ -615,7 +615,6 @@ impl<T> Buffer for ArenaIndexedWithRingStagingBuffer<T> {
         self.raw().usage.clone()
     }
 
-
     fn raw(&self) -> &RawBuffer {
         self.gpu_only.raw()
     }
@@ -674,12 +673,12 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
         )?;
         log::debug!(
             "New Gpu Buffer for Arena with these usage flags {:?}",
-            buffer_usage_flags| vk::BufferUsageFlags::TRANSFER_SRC  | vk::BufferUsageFlags::TRANSFER_DST
+            buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST
         );
         let mut gpu_buffer = GpuOnlyBuffer::new::<T>(
             core.clone(),
             byte_length,
-            buffer_usage_flags| vk::BufferUsageFlags::TRANSFER_SRC  | vk::BufferUsageFlags::TRANSFER_DST,
+            buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
             name,
         )?;
 
@@ -704,10 +703,15 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
         let staging = StagingBuffer::new(
             core.clone(),
             (capacity * std::mem::size_of::<T>() * MAX_FRAMES_IN_FLIGHT) as vk::DeviceSize,
-            usage | vk::BufferUsageFlags::TRANSFER_SRC ,
+            usage | vk::BufferUsageFlags::TRANSFER_SRC,
             name,
         )?; //TODO flags
-        let gpu_only = GpuOnlyBuffer::new::<T>(core.clone(), (capacity * std::mem::size_of::<T>() ) as vk::DeviceSize, usage| vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST, name)?;
+        let gpu_only = GpuOnlyBuffer::new::<T>(
+            core.clone(),
+            (capacity * std::mem::size_of::<T>()) as vk::DeviceSize,
+            usage | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
+            name,
+        )?;
 
         // Populate the free list with all available indices
         let free_slots = (0..capacity).rev().collect();
@@ -794,12 +798,9 @@ impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
     }
 }
 
-
 /// Derives the appropriate pipeline stages and access flags for reading a buffer
 /// based on the usage flags it was created with.
-pub fn infer_read_masks_from_usage(
-    usage: vk::BufferUsageFlags,
-) -> (vk::PipelineStageFlags2, vk::AccessFlags2) {
+pub fn infer_read_masks_from_usage(usage: vk::BufferUsageFlags) -> (vk::PipelineStageFlags2, vk::AccessFlags2) {
     let mut stage_mask = vk::PipelineStageFlags2::empty();
     let mut access_mask = vk::AccessFlags2::empty();
 

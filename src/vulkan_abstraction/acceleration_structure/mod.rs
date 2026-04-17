@@ -6,9 +6,9 @@ use std::rc::Rc;
 pub use blas::*;
 pub use tlas::*;
 
+use crate::vulkan_abstraction::Buffer;
 use crate::{error::*, vulkan_abstraction};
 use ash::vk;
-use crate::vulkan_abstraction::Buffer;
 
 pub struct AccelerationStructure {
     core: Rc<vulkan_abstraction::Core>,
@@ -41,7 +41,6 @@ impl AccelerationStructure {
         } else {
             vk::BuildAccelerationStructureFlagsKHR::PREFER_FAST_TRACE
         };
-        
 
         // parameters on how to build the acceleration structure.
         // this temporary version is used to calculate how much memory to allocate for it,
@@ -123,7 +122,8 @@ impl AccelerationStructure {
         // - fill with the commands to build the acceleration structure
         // - pass to the queue to be executed (thus building the acceleration structure)
         // - free
-        let build_command_buffer = vulkan_abstraction::cmd_buffer::new_command_buffer(core.graphics_cmd_pool(), core.device().inner())?;
+        let build_command_buffer =
+            vulkan_abstraction::cmd_buffer::new_command_buffer(core.graphics_cmd_pool(), core.device().inner())?;
 
         //record build_command_buffer with the commands to build the acceleration structure
         unsafe {
@@ -143,7 +143,7 @@ impl AccelerationStructure {
 
         // build_command_buffer must not be in a pending state when
         // free_command_buffers is called on it
-        // NOTE: this is actually quite bad for performance if there are many acceleration structure builds/updates being done one after the other TODO async 
+        // NOTE: this is actually quite bad for performance if there are many acceleration structure builds/updates being done one after the other TODO async
         core.graphics_queue().submit_sync(build_command_buffer)?;
 
         unsafe {

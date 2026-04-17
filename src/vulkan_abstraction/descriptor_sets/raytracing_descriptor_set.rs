@@ -1,8 +1,8 @@
-use std::rc::Rc;
-use ash::vk;
 use crate::error::SrResult;
 use crate::vulkan_abstraction;
 use crate::vulkan_abstraction::TLAS;
+use ash::vk;
+use std::rc::Rc;
 
 pub struct RaytracingDescriptorSetLayout {
     descriptor_set_layout: vk::DescriptorSetLayout,
@@ -23,7 +23,6 @@ impl RaytracingDescriptorSetLayout {
     pub const EMISSIVE_TRIANGLES_BINDING: u32 = 9;
     pub const BLUE_NOISE_BINDING: u32 = 10;
     pub const NUMBER_OF_BINDINGS: usize = 11;
-
 
     pub const NUMBER_OF_SAMPLERS: u32 = vulkan_abstraction::ShaderDataBuffers::NUMBER_OF_SAMPLERS as u32;
 
@@ -123,8 +122,6 @@ impl Drop for RaytracingDescriptorSetLayout {
     }
 }
 
-
-
 pub struct RaytracingDescriptorSets {
     descriptor_sets: Vec<vk::DescriptorSet>,
     descriptor_pool: vk::DescriptorPool,
@@ -158,11 +155,11 @@ impl RaytracingDescriptorSets {
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(1),
             vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::STORAGE_BUFFER)     //Meshes info + Emissive triangles
+                .ty(vk::DescriptorType::STORAGE_BUFFER) //Meshes info + Emissive triangles
                 .descriptor_count(2),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS + 1),       //The +1 is for the blue noise texture
+                .descriptor_count(RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS + 1), //The +1 is for the blue noise texture
         ];
 
         let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo::default()
@@ -254,9 +251,6 @@ impl RaytracingDescriptorSets {
                 .dst_set(descriptor_sets[0])
                 .dst_binding(RaytracingDescriptorSetLayout::MOTION_VECTOR_BINDING),
         );
-
-
-
 
         // write matrices uniform buffer to descriptor set
         let descriptor_buffer_infos = [vk::DescriptorBufferInfo::default()

@@ -73,7 +73,6 @@ impl Queue {
         self.queue_family_index
     }
 
-
     pub fn queue_index(&self) -> u32 {
         self.queue_index
     }

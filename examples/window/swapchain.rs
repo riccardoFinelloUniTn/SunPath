@@ -123,7 +123,6 @@ impl Swapchain {
 
             s
         };
-        
 
         let image_views = images
             .iter()

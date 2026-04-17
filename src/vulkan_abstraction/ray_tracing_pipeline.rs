@@ -36,13 +36,11 @@ impl RayTracingPipeline {
 
         let make_shader_stage_create_info =
             |stage: vk::ShaderStageFlags, spirv: &[u8]| -> SrResult<vk::PipelineShaderStageCreateInfo> {
-
                 let spirv_u32 = bytemuck::cast_slice(spirv);
 
                 let module_create_info = vk::ShaderModuleCreateInfo::default()
                     .flags(vk::ShaderModuleCreateFlags::empty())
                     .code(spirv_u32);
-
 
                 let module = unsafe { device.create_shader_module(&module_create_info, None) }?;
 
@@ -160,8 +158,6 @@ impl RayTracingPipeline {
         self.pipeline_layout
     }
 }
-
-
 
 impl Drop for RayTracingPipeline {
     fn drop(&mut self) {

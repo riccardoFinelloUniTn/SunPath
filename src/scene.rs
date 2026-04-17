@@ -27,13 +27,18 @@ impl Scene {
         &self.nodes
     }
 
+    /// Returns (blas_instances, blas_indices_per_instance, materials, textures, samplers, images, emissive_triangles).
+    /// `blas_indices_per_instance[i]` is the index into `blases` for the i-th instance.
+    /// `emissive_triangles` are in local space (per-BLAS). BLAS.emissive_triangle_ranges are set.
     pub fn load_into_gpu<'a>(
+        //TODO it currently uses the indices from the gltf which are dense, there will be duplicated indices if two scene are loaded
         &self,
         core: &Rc<vulkan_abstraction::Core>,
         blases: &'a mut Vec<vulkan_abstraction::BLAS>,
         mut scene_data: crate::SceneData,
     ) -> SrResult<(
         Vec<vulkan_abstraction::BlasInstance<'a>>,
+        Vec<usize>, // blas_index per instance
         Vec<vulkan_abstraction::gltf::Material>,
         Vec<vulkan_abstraction::gltf::Texture>,
         Vec<vulkan_abstraction::image::Sampler>,
@@ -59,6 +64,8 @@ impl Scene {
                 &mut emissive_triangles,
             )?;
         }
+
+        let blas_indices: Vec<usize> = blas_instances_info.iter().map(|(idx, _)| *idx).collect();
 
         let blas_instances = blas_instances_info
             .into_iter()
@@ -94,6 +101,7 @@ impl Scene {
 
         Ok((
             blas_instances,
+            blas_indices,
             materials,
             scene_data.textures,
             samplers?,
@@ -103,7 +111,7 @@ impl Scene {
     }
 
     pub fn update_gpu_data<'a>(
-        //TODO questa non va bene bisogna stare attenti agli indici per l'arena allocation
+        //TODO it currently uses the indices from the gltf which are dense, there will be duplicated indices if two scene are loaded
         &self,
         core: &Rc<vulkan_abstraction::Core>,
         blases: &'a mut Vec<vulkan_abstraction::BLAS>,
@@ -191,12 +199,37 @@ impl Scene {
                     None => {
                         let primitive_data = scene_data.primitive_data_map.remove(&primitive_unique_key).unwrap();
 
-                        let blas = vulkan_abstraction::BLAS::new(
+                        let mut blas = vulkan_abstraction::BLAS::new(
                             core.clone(),
                             primitive_data.vertex_buffer,
                             primitive_data.index_buffer,
                             false,
                         )?;
+
+                        // Extract local-space emissive triangles per-BLAS (only once per unique geometry).
+                        // Stored in local space — the shader applies entity transforms at sample time.
+                        if !primitive.local_emissive_triangles.is_empty() {
+                            let material = &primitive.material;
+                            let emission = [
+                                material.emissive_factor[0] * material.emissive_strength,
+                                material.emissive_factor[1] * material.emissive_strength,
+                                material.emissive_factor[2] * material.emissive_strength,
+                                0.0,
+                            ];
+
+                            let start = emissive_triangles.len() as u32;
+                            for local_tri in &primitive.local_emissive_triangles {
+                                emissive_triangles.push(vulkan_abstraction::gltf::EmissiveTriangle {
+                                    v0: [local_tri[0].x, local_tri[0].y, local_tri[0].z, 0.0],
+                                    v1: [local_tri[1].x, local_tri[1].y, local_tri[1].z, 0.0],
+                                    v2: [local_tri[2].x, local_tri[2].y, local_tri[2].z, 0.0],
+                                    emission,
+                                });
+                            }
+                            let end = emissive_triangles.len() as u32;
+                            blas.emissive_triangle_ranges.push(start..end);
+                        }
+
                         blases.push(blas);
 
                         let blas_index = blases.len() - 1;
@@ -206,48 +239,7 @@ impl Scene {
                     }
                 };
 
-                if !primitive.local_emissive_triangles.is_empty() {
-                    let material = &primitive.material;
-                    let node_transform_matrix = node.transform();
-
-                    let emission = [
-                        material.emissive_factor[0] * material.emissive_strength,
-                        material.emissive_factor[1] * material.emissive_strength,
-                        material.emissive_factor[2] * material.emissive_strength,
-                        0.0,
-                    ];
-
-                    for local_tri in &primitive.local_emissive_triangles {
-                        // Apply this specific instance's transform
-                        let world_v0 = node_transform_matrix * local_tri[0];
-                        let world_v1 = node_transform_matrix * local_tri[1];
-                        let world_v2 = node_transform_matrix * local_tri[2];
-
-                        let edge1 = world_v1.xyz() - world_v0.xyz();
-                        let edge2 = world_v2.xyz() - world_v0.xyz();
-                        let area = edge1.cross(&edge2).norm() * 0.5;
-
-                        emissive_triangles.push(vulkan_abstraction::gltf::EmissiveTriangle {
-                            v0: [world_v0.x, world_v0.y, world_v0.z, area],
-                            v1: [world_v1.x, world_v1.y, world_v1.z, 0.0],
-                            v2: [world_v2.x, world_v2.y, world_v2.z, 0.0],
-                            emission,
-                        });
-                    }
-                }
-
                 materials.push(primitive.material.clone());
-
-                // the first idea that could come to your mind is to create a BlasInstance here directly.
-                // Apart from having to manage lifetimes it is still not going to work because:
-                // - &blases[blases.len()]
-                // creates an immutable borrow of blases when a mutable borrow already exist - compiler error!
-                // - blases.last() - compiler error!
-                // - blases.last_mut()
-                // creates another mutable borrow when anoter mutable borrow already exists
-                // but only one mutable borrow can exist at any time - compile error!
-                //
-                // tl;dr don't waste time making lifetimes work
                 blas_instances_info.push((blas_index, *node.transform()));
             }
         }
@@ -263,7 +255,7 @@ impl Scene {
                     materials,
                     scene_data,
                     emissive_triangles,
-                )? // mut borrow
+                )?
             }
         }
 

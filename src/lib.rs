@@ -16,7 +16,10 @@ use ash::vk;
 use crate::utils::env_var_as_bool;
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
-use crate::vulkan_abstraction::{BlasInstance, BlasMetaData, BlasState, Buffer, DenoiseDescriptorSetLayout, DenoisePass, Dynamic, PostProcessDescriptorSets, PostprocessPass, TemporalPass};
+use crate::vulkan_abstraction::{
+    BlasInstance, BlasMetaData, BlasState, Buffer, DenoiseDescriptorSetLayout, DenoisePass, Dynamic, PostProcessDescriptorSets,
+    PostprocessPass, TemporalPass,
+};
 
 pub const DENOISE_PASSES: u32 = 4;
 
@@ -29,7 +32,6 @@ const MAX_TLAS_INSTANCES: usize = 10_000;
 /// Apparently 2 is the most common choice. Empirically it seems like the performance doesn't really
 /// get any better with a higher number, but it does get measurably worse with only 1.
 pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
-
 
 //TODO add a list of callbacks to call at the end of frames for cleanup or at start for setup
 //TODO deferred deallocation for buffers and acceleration structures
@@ -72,8 +74,7 @@ pub struct Renderer {
     blases: Vec<vulkan_abstraction::BLAS>,
     tlas: vulkan_abstraction::TLAS,
 
-
-    is_tlas_dirty : bool,
+    is_tlas_dirty: bool,
 
     instances_buffer: vulkan_abstraction::StagingBuffer<vk::AccelerationStructureInstanceKHR>,
     cpu_instances_data: Vec<vulkan_abstraction::BlasMetaData>,
@@ -153,15 +154,14 @@ impl Renderer {
         let mut instances_buffer = vulkan_abstraction::StagingBuffer::new(
             Rc::clone(&core),
             MAX_TLAS_INSTANCES as vk::DeviceSize,
-            vk::BufferUsageFlags::STORAGE_BUFFER |
-                vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS |
-                vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-            "Cpu side instances of blases"
+            vk::BufferUsageFlags::STORAGE_BUFFER
+                | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+            "Cpu side instances of blases",
         )?; //TODO const value a caso
 
-
         let blases = vec![];
-        let tlas = vulkan_abstraction::TLAS::new(Rc::clone(&core), &[] ,&mut instances_buffer )?;
+        let tlas = vulkan_abstraction::TLAS::new(Rc::clone(&core), &[], &mut instances_buffer)?;
 
         //must be filled by loading a scene
         let shader_data_buffers = vulkan_abstraction::ShaderDataBuffers::new_empty(Rc::clone(&core))?;
@@ -218,8 +218,6 @@ impl Renderer {
         let blue_noise_img = image::load_from_memory(blue_noise_bytes).unwrap().to_rgba8();
         let (noise_width, noise_height) = blue_noise_img.dimensions();
         let blue_noise_data = blue_noise_img.into_raw();
-
-
 
         let blue_noise_image = vulkan_abstraction::Image::new_from_data(
             Rc::clone(&core),
@@ -291,7 +289,6 @@ impl Renderer {
             vk::SamplerAddressMode::CLAMP_TO_EDGE,
             vk::SamplerMipmapMode::LINEAR,
         )?;
-
 
         Ok((
             Self {
@@ -411,7 +408,9 @@ impl Renderer {
             device.end_command_buffer(setup_cmd_buf.inner())?;
 
             let fence = setup_cmd_buf.fence_mut().submit()?;
-            self.core.graphics_queue().submit_async(setup_cmd_buf.inner(), &[], &[], &[], fence)?;
+            self.core
+                .graphics_queue()
+                .submit_async(setup_cmd_buf.inner(), &[], &[], &[], fence)?;
             setup_cmd_buf.fence_mut().wait()?;
         }
 
@@ -550,7 +549,9 @@ impl Renderer {
 
                     // Submit to GPU and immediately wait for it to finish
                     let fence = setup_cmd_buf.fence_mut().submit()?;
-                    self.core.graphics_queue().submit_async(setup_cmd_buf.inner(), &[], &[], &[], fence)?;
+                    self.core
+                        .graphics_queue()
+                        .submit_async(setup_cmd_buf.inner(), &[], &[], &[], fence)?;
 
                     // Block the CPU so we guarantee the transitions are done before rendering starts
                     setup_cmd_buf.fence_mut().wait()?;
@@ -625,7 +626,7 @@ impl Renderer {
                 unsafe { self.core.device().inner().end_command_buffer(blit_cmd_buf.inner()) }?;
             }
 
-            let raytracing_finished_semaphore =  vulkan_abstraction::Semaphore::new(self.core.clone())?;
+            let raytracing_finished_semaphore = vulkan_abstraction::Semaphore::new(self.core.clone())?;
 
             self.image_dependant_data.insert(
                 *post_blit_image,
@@ -659,24 +660,24 @@ impl Renderer {
     }
 
     pub fn load_scene(&mut self, scene: &crate::Scene, scene_data: crate::SceneData) -> SrResult<()> {
-        let (blas_instances, materials, textures, samplers, images, emissive_triangles) =
-            scene.load_into_gpu(&self.core, &mut self.blases,  scene_data)?;
+        let (blas_instances, blas_indices, materials, textures, samplers, images, emissive_triangles) =
+            scene.load_into_gpu(&self.core, &mut self.blases, scene_data)?;
 
+        // Set textures (doesn't need &self.blases)
         let fallback_texture = vulkan_abstraction::Texture(&self.fallback_texture_image, &self.fallback_texture_sampler);
-        self.tlas.rebuild(&blas_instances,&mut self.instances_buffer)?;
-        self.shader_data_buffers.update(
-            &blas_instances,
-            &materials,
-            &images,
-            &samplers,
-            &textures,
-            fallback_texture,
-            &self.default_sampler,
-            &emissive_triangles,
-        )?;
+        self.shader_data_buffers
+            .set_textures(&images, &samplers, &textures, fallback_texture, &self.default_sampler);
 
-        self.scene_images = images;
-        self.scene_samplers = samplers;
+        // TLAS rebuild (needs blas_instances which borrows self.blases)
+        self.tlas.rebuild(&blas_instances, &mut self.instances_buffer)?;
+
+        // Collect entity creation data and consume blas_instances (drops borrow on self.blases)
+        let entity_creation_data: Vec<_> = blas_instances
+            .iter()
+            .zip(blas_indices.iter())
+            .zip(materials.iter())
+            .map(|((bi, &blas_idx), mat)| (blas_idx, mat.clone(), bi.transform))
+            .collect();
 
         self.cpu_instances_data = blas_instances
             .into_iter()
@@ -686,8 +687,20 @@ impl Renderer {
             })
             .collect();
 
+        // Now self.blases is free — feed emissive data and create entities
+        self.shader_data_buffers.add_blas_emissive_triangles(&emissive_triangles);
+        self.shader_data_buffers.upload_blas_emissive_triangles()?;
+
+        for (blas_idx, material, transform) in &entity_creation_data {
+            self.shader_data_buffers
+                .create_entity(&self.blases[*blas_idx], *blas_idx, material, *transform)?;
+        }
+
+        self.shader_data_buffers.rebuild_emissive_indirection(&self.blases)?;
+
+        self.scene_images = images;
+        self.scene_samplers = samplers;
         self.image_dependant_data = HashMap::new();
-        // self.clear_image_dependent_data();
 
         Ok(())
     }
@@ -701,8 +714,7 @@ impl Renderer {
 
         // Upload the struct to the uniform buffer
         self.shader_data_buffers.set_matrices(matrices)?;
-        
-        
+
         // Save the current frame's matrix to use as history NEXT frame
         self.prev_view_proj = tmp;
 
@@ -740,28 +752,25 @@ impl Renderer {
         let postprocess_descriptor_sets_ptr =
             &img_dependent_data.postprocess_descriptor_sets as *const vulkan_abstraction::PostProcessDescriptorSets;
 
-
-
         unsafe {
             // Use (*this_ptr).core because 'self.core' is locked by 'img_dependent_data'
             let device = (*this_ptr).core.device().inner();
 
-
-
             // Supponiamo che tu abbia salvato il semaforo restituito dalla transfer queue
             // in un campo opzionale `self.pending_transfer_semaphore`
             let wait_semaphores = (*this_ptr).core.transfer_semaphores_mut().drain(..).collect::<Vec<_>>();
-                // IMPORTANTE: Diciamo alla GPU di aspettare PRIMA di lanciare i Ray Tracing Shader
-                // Se la TLAS viene aggiornata in questo cmd buffer, aggiungi anche ACCELERATION_STRUCTURE_BUILD_KHR
-            let wait_stages = wait_semaphores.iter().map(|semaphore| {
-                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR | vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
-            }).collect::<Vec<_>>();
-
+            // IMPORTANTE: Diciamo alla GPU di aspettare PRIMA di lanciare i Ray Tracing Shader
+            // Se la TLAS viene aggiornata in questo cmd buffer, aggiungi anche ACCELERATION_STRUCTURE_BUILD_KHR
+            let wait_stages = wait_semaphores
+                .iter()
+                .map(|semaphore| {
+                    vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR | vk::PipelineStageFlags::ACCELERATION_STRUCTURE_BUILD_KHR
+                })
+                .collect::<Vec<_>>();
 
             let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
 
             device.begin_command_buffer(cmd_buf, &begin_info)?;
-
 
             (*this_ptr).cmd_raytracing_render(
                 cmd_buf,
@@ -909,7 +918,10 @@ impl Renderer {
         }
 
         // Blitting
-        let (wait_sems, wait_dst_stages) = ([wait_sem , img_dependent_data.raytracing_finished_semaphore.inner()], [vk::PipelineStageFlags::ALL_GRAPHICS ,vk::PipelineStageFlags::TRANSFER]);
+        let (wait_sems, wait_dst_stages) = (
+            [wait_sem, img_dependent_data.raytracing_finished_semaphore.inner()],
+            [vk::PipelineStageFlags::ALL_GRAPHICS, vk::PipelineStageFlags::TRANSFER],
+        );
         let (wait_sems, wait_dst_stages) = if wait_sem == vk::Semaphore::null() {
             ([].as_slice(), [].as_slice())
         } else {
@@ -985,7 +997,7 @@ impl Renderer {
         };
 
         self.relative_frame_count += 1;
-        *self.core.absolute_frame_count.borrow_mut() += 1 ;
+        *self.core.absolute_frame_count.borrow_mut() += 1;
         unsafe {
             let subresource_range = vk::ImageSubresourceRange::default()
                 .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -1566,7 +1578,7 @@ impl Renderer {
         &self.core
     }
 
-    /// Updates the local CPU copy of an object's transform TODO temp gemini e ci vuole troppo tempo
+    /// Updates the local CPU copy of an object's transform
     pub fn set_object_transform(&mut self, instance_id: usize, transform: nalgebra::Matrix4<f32>) {
         if instance_id >= self.cpu_instances_data.len() {
             log::warn!("Attempted to update invalid instance ID: {}", instance_id);
@@ -1592,6 +1604,10 @@ impl Renderer {
         };
 
         self.cpu_instances_data[instance_id].transform = vk_transform;
+
+        // Also update the entity transform in the resource manager (for emissive shader access)
+        let entity_id = vulkan_abstraction::EntityId(instance_id as u64);
+        let _ = self.shader_data_buffers.set_entity_transform(entity_id, vk_transform);
     }
 
     /// Call this ONCE per frame before `render_to_image` to update blasses that needs it
@@ -1605,15 +1621,18 @@ impl Renderer {
         //     blas
         // }
 
-        let blas_instances = &self.cpu_instances_data.iter().enumerate().map(|(index, cpu_instance)|{
-            BlasInstance{
+        let blas_instances = &self
+            .cpu_instances_data
+            .iter()
+            .enumerate()
+            .map(|(index, cpu_instance)| BlasInstance {
                 blas: &self.blases[index],
                 transform: cpu_instance.transform,
                 blas_instance_index: cpu_instance.blas_instance_index,
-            }
-        }).collect::<Vec<_>>();
+            })
+            .collect::<Vec<_>>();
 
-        self.tlas.update(blas_instances, &mut self.instances_buffer )?;
+        self.tlas.update(blas_instances, &mut self.instances_buffer)?;
         Ok(())
     }
 
@@ -1623,15 +1642,18 @@ impl Renderer {
         // NOTE: For better performance later, you can swap `rebuild` for an `update`
         // command if your TLAS abstraction supports VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
 
-        let blas_instances = &self.cpu_instances_data.iter().enumerate().map(|(index, cpu_instance)|{
-            BlasInstance{
+        let blas_instances = &self
+            .cpu_instances_data
+            .iter()
+            .enumerate()
+            .map(|(index, cpu_instance)| BlasInstance {
                 blas: &self.blases[index],
                 transform: cpu_instance.transform,
                 blas_instance_index: cpu_instance.blas_instance_index,
-            }
-        }).collect::<Vec<_>>();
+            })
+            .collect::<Vec<_>>();
 
-        self.tlas.update(blas_instances, &mut self.instances_buffer )?;
+        self.tlas.update(blas_instances, &mut self.instances_buffer)?;
         Ok(())
     }
 }

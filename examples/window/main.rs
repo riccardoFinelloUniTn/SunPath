@@ -3,7 +3,12 @@ use std::rc::Rc;
 use ash::vk;
 use nalgebra as na;
 use std::time::Instant;
-use sunray::{camera::Camera, error::{ErrorSource, SrResult}, vulkan_abstraction, MAX_FRAMES_IN_FLIGHT};
+use sunray::{
+    MAX_FRAMES_IN_FLIGHT,
+    camera::Camera,
+    error::{ErrorSource, SrResult},
+    vulkan_abstraction,
+};
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -39,7 +44,6 @@ struct App {
     last_fps_check: Option<Instant>,
     frames_since_check: u32,
 }
-
 
 impl App {
     fn build_resources(&mut self, size: (u32, u32)) -> SrResult<()> {
@@ -274,9 +278,6 @@ impl App {
         let rotation = na::Rotation3::from_axis_angle(&na::Vector3::y_axis(), time);
         self.res_mut().renderer.set_object_transform(3, rotation.to_homogeneous());
 
-
-
-        
         //TODO it is more costly than expected and need fences and semaphores
         //  self.res_mut().renderer.rebuild_tlas()?;
 

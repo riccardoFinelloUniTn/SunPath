@@ -19,12 +19,7 @@ impl VertexBuffer {
             | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
 
         Ok(Self {
-            buffer: vulkan_abstraction::GpuOnlyBuffer::new_from_data(
-                core,
-                data,
-                usage_flags,
-                "vertex buffer for BLAS usage",
-            )?,
+            buffer: vulkan_abstraction::GpuOnlyBuffer::new_from_data(core, data, usage_flags, "vertex buffer for BLAS usage")?,
             len: data.len(),
             stride: std::mem::size_of::<T>(),
         })
@@ -38,12 +33,7 @@ impl VertexBuffer {
             | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR;
 
         Ok(Self {
-            buffer: vulkan_abstraction::GpuOnlyBuffer::new::<T>(
-                core,
-                len,
-                usage_flags,
-                "vertex buffer for BLAS usage",
-            )?,
+            buffer: vulkan_abstraction::GpuOnlyBuffer::new::<T>(core, len, usage_flags, "vertex buffer for BLAS usage")?,
             len: len as usize,
             stride: std::mem::size_of::<T>(),
         })

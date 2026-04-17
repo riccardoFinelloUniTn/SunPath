@@ -47,17 +47,16 @@ pub struct AlignedAs<Align, Bytes: ?Sized> {
 }
 
 macro_rules! include_bytes_align_as {
-    ($align_ty:ty, $path:expr) => {
-        {  // const block expression to encapsulate the static
-            use $crate::utils::AlignedAs;
+    ($align_ty:ty, $path:expr) => {{
+        // const block expression to encapsulate the static
+        use $crate::utils::AlignedAs;
 
-            // this assignment is made possible by CoerceUnsized
-            static ALIGNED: &AlignedAs::<$align_ty, [u8]> = &AlignedAs {
-                _align: [],
-                bytes: *include_bytes!($path),
-            };
+        // this assignment is made possible by CoerceUnsized
+        static ALIGNED: &AlignedAs<$align_ty, [u8]> = &AlignedAs {
+            _align: [],
+            bytes: *include_bytes!($path),
+        };
 
-            &ALIGNED.bytes
-        }
-    };
+        &ALIGNED.bytes
+    }};
 }

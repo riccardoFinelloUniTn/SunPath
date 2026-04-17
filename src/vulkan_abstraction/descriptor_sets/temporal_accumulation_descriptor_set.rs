@@ -1,7 +1,7 @@
-use std::rc::Rc;
-use ash::vk;
 use crate::error::SrResult;
 use crate::vulkan_abstraction;
+use ash::vk;
+use std::rc::Rc;
 
 pub struct TemporalAccumulationDescriptorSetLayout {
     descriptor_set_layout: vk::DescriptorSetLayout,
@@ -9,12 +9,10 @@ pub struct TemporalAccumulationDescriptorSetLayout {
 }
 
 impl TemporalAccumulationDescriptorSetLayout {
-    pub const RAW_COLOR_BINDING: u32 = 0;      // Current Noisy Frame
-    pub const MOTION_VECTOR_BINDING: u32 = 1;  // Input from Raytrace pass
-    pub const OUTPUT_IMAGES_BINDING: u32 = 2;  // Array of 2 (Ping-Pong Storage)
+    pub const RAW_COLOR_BINDING: u32 = 0; // Current Noisy Frame
+    pub const MOTION_VECTOR_BINDING: u32 = 1; // Input from Raytrace pass
+    pub const OUTPUT_IMAGES_BINDING: u32 = 2; // Array of 2 (Ping-Pong Storage)
     pub const HISTORY_SAMPLERS_BINDING: u32 = 3; // Array of 2 (Ping-Pong Sampler)
-
-    
 
     pub const NUMBER_OF_BINDINGS: usize = 4;
 
@@ -28,21 +26,18 @@ impl TemporalAccumulationDescriptorSetLayout {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
-
             // 1: Motion Vectors (Storage or Sampler, usually Storage is fine)
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::MOTION_VECTOR_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
-
             // 2: Accumulation Images [Ping, Pong]
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::OUTPUT_IMAGES_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(2)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
-
             // 3: History Samplers [Ping, Pong]
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::HISTORY_SAMPLERS_BINDING)
@@ -51,12 +46,9 @@ impl TemporalAccumulationDescriptorSetLayout {
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
         ];
 
-        let create_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .bindings(&bindings);
+        let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
 
-        let descriptor_set_layout = unsafe {
-            device.create_descriptor_set_layout(&create_info, None)?
-        };
+        let descriptor_set_layout = unsafe { device.create_descriptor_set_layout(&create_info, None)? };
 
         Ok(Self {
             descriptor_set_layout,
@@ -90,10 +82,10 @@ impl TemporalAccumulationDescriptorSets {
     pub fn new(
         core: &Rc<vulkan_abstraction::Core>,
         layout: &TemporalAccumulationDescriptorSetLayout,
-        input_image: &vulkan_abstraction::Image,       // Binding 0: Noisy Raytrace result
+        input_image: &vulkan_abstraction::Image,         // Binding 0: Noisy Raytrace result
         motion_vector_image: &vulkan_abstraction::Image, // Binding 1: Motion Vectors
         accumulation_images: &[vulkan_abstraction::Image; 2], // Binding 2: Storage Images (Ping-Pong Output)
-        history_images: &[vulkan_abstraction::Image; 2],      // Binding 3: Samplers (Ping-Pong History)
+        history_images: &[vulkan_abstraction::Image; 2], // Binding 3: Samplers (Ping-Pong History)
         history_sampler: vk::Sampler,
     ) -> SrResult<Self> {
         let device = core.device().inner();
@@ -108,9 +100,7 @@ impl TemporalAccumulationDescriptorSets {
                 .descriptor_count(3), // 1 Input + 2 History
         ];
 
-        let pool_info = vk::DescriptorPoolCreateInfo::default()
-            .pool_sizes(&pool_sizes)
-            .max_sets(1);
+        let pool_info = vk::DescriptorPoolCreateInfo::default().pool_sizes(&pool_sizes).max_sets(1);
 
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None)? };
 
@@ -131,19 +121,15 @@ impl TemporalAccumulationDescriptorSets {
         };
 
         // 3. Create Image Infos
-        let input_info =
-            {
-                vk::DescriptorImageInfo::default()
-                    .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                    .image_view(input_image.image_view())
-                    .sampler(history_sampler)
-            };
+        let input_info = {
+            vk::DescriptorImageInfo::default()
+                .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .image_view(input_image.image_view())
+                .sampler(history_sampler)
+        };
         let mv_info = create_info(motion_vector_image);
 
-        let accumulation_infos = [
-            create_info(&accumulation_images[0]),
-            create_info(&accumulation_images[1]),
-        ];
+        let accumulation_infos = [create_info(&accumulation_images[0]), create_info(&accumulation_images[1])];
 
         let history_infos = [
             vk::DescriptorImageInfo::default()
@@ -163,19 +149,16 @@ impl TemporalAccumulationDescriptorSets {
                 .dst_binding(TemporalAccumulationDescriptorSetLayout::RAW_COLOR_BINDING)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .image_info(std::slice::from_ref(&input_info)),
-
             vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(TemporalAccumulationDescriptorSetLayout::MOTION_VECTOR_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(std::slice::from_ref(&mv_info)),
-
             vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(TemporalAccumulationDescriptorSetLayout::OUTPUT_IMAGES_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(&accumulation_infos),
-
             vk::WriteDescriptorSet::default()
                 .dst_set(set)
                 .dst_binding(TemporalAccumulationDescriptorSetLayout::HISTORY_SAMPLERS_BINDING)
@@ -192,27 +175,29 @@ impl TemporalAccumulationDescriptorSets {
         })
     }
 
-    pub fn update_temporal_descriptors(
-        &self,
-        images: &[vulkan_abstraction::image::Image; 2],
-        sampler: vk::Sampler,
-    ) {
+    pub fn update_temporal_descriptors(&self, images: &[vulkan_abstraction::image::Image; 2], sampler: vk::Sampler) {
         let device = self.core.device().inner();
 
         // 1. Prepare for Binding 2 (Storage Images - Writing)
-        let accum_infos = images.iter().map(|img| {
-            vk::DescriptorImageInfo::default()
-                .image_view(img.image_view())
-                .image_layout(vk::ImageLayout::GENERAL)
-        }).collect::<Vec<_>>();
+        let accum_infos = images
+            .iter()
+            .map(|img| {
+                vk::DescriptorImageInfo::default()
+                    .image_view(img.image_view())
+                    .image_layout(vk::ImageLayout::GENERAL)
+            })
+            .collect::<Vec<_>>();
 
         // 2. Prepare for Binding 3 (Combined Image Samplers - Reading History)
-        let history_infos = images.iter().map(|img| {
-            vk::DescriptorImageInfo::default()
-                .sampler(sampler)
-                .image_view(img.image_view())
-                .image_layout(vk::ImageLayout::GENERAL)
-        }).collect::<Vec<_>>();
+        let history_infos = images
+            .iter()
+            .map(|img| {
+                vk::DescriptorImageInfo::default()
+                    .sampler(sampler)
+                    .image_view(img.image_view())
+                    .image_layout(vk::ImageLayout::GENERAL)
+            })
+            .collect::<Vec<_>>();
 
         let mut writes = Vec::new();
 

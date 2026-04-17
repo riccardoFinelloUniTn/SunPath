@@ -5,16 +5,16 @@ pub use device::*;
 use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
 pub use instance::*;
 
+use crate::vulkan_abstraction;
+use crate::vulkan_abstraction::Queue;
+use crate::{CreateSurfaceFn, error::*};
+use ash::vk::Semaphore;
+use ash::{khr, vk};
+use parking_lot::lock_api::MutexGuard;
+use parking_lot::{Mutex, RawMutex};
 use std::cell::{Ref, RefCell, RefMut};
 use std::ffi::CStr;
 use std::rc::Rc;
-use parking_lot::{Mutex, RawMutex};
-use crate::vulkan_abstraction;
-use crate::{CreateSurfaceFn, error::*};
-use ash::{khr, vk};
-use ash::vk::Semaphore;
-use parking_lot::lock_api::MutexGuard;
-use crate::vulkan_abstraction::Queue;
 
 #[rustfmt::skip]
 #[allow(unused)]
@@ -100,9 +100,7 @@ impl Core {
         let acceleration_structure_device = khr::acceleration_structure::Device::new(&instance.inner(), &device.inner());
         let ray_tracing_pipeline_device = khr::ray_tracing_pipeline::Device::new(&instance.inner(), &device.inner());
 
-
-        let graphics_queue = vulkan_abstraction::Queue::new(Rc::clone(&device), 0  ,device.graphics_queue_family_index()  )?;
-
+        let graphics_queue = vulkan_abstraction::Queue::new(Rc::clone(&device), 0, device.graphics_queue_family_index())?;
 
         let graphics_family = device.graphics_queue_family_index();
         let (transfer_queue, transfer_cmd_pool) = if let Some(transfer_family) = device.transfer_queue_family_index() {
@@ -111,7 +109,7 @@ impl Core {
             let pool = vulkan_abstraction::CmdPool::new(
                 Rc::clone(&device),
                 transfer_family,
-                vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER
+                vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
             )?;
             (queue, pool)
         } else {
@@ -120,7 +118,7 @@ impl Core {
             let pool = vulkan_abstraction::CmdPool::new(
                 Rc::clone(&device),
                 graphics_family,
-                vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER
+                vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
             )?;
             (queue, pool)
         };
@@ -128,9 +126,8 @@ impl Core {
         let graphics_cmd_pool = vulkan_abstraction::CmdPool::new(
             Rc::clone(&device),
             graphics_family,
-            vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER
+            vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
         )?;
-
 
         Ok((
             Self {
@@ -173,11 +170,11 @@ impl Core {
     pub fn graphics_queue(&self) -> MutexGuard<'_, RawMutex, Queue> {
         self.graphics_queue.lock()
     }
- 
+
     pub fn transfer_queue(&self) -> MutexGuard<'_, RawMutex, Queue> {
         self.transfer_queue.lock()
     }
-    
+
     pub fn allocator(&self) -> Ref<'_, Allocator> {
         self.allocator.borrow()
     }
@@ -202,10 +199,7 @@ impl Core {
     /// Invia un command buffer alla coda di trasferimento.
     /// Ritorna un Semaforo (che la coda grafica dovrà aspettare)
     /// e un Fence (che la CPU può opzionalmente aspettare).
-    pub fn submit_transfer_commands(
-        &self,
-        transfer_cmd_buffer: vk::CommandBuffer
-    ) -> SrResult<(vk::Semaphore, vk::Fence)> {
+    pub fn submit_transfer_commands(&self, transfer_cmd_buffer: vk::CommandBuffer) -> SrResult<(vk::Semaphore, vk::Fence)> {
         let device = self.device.inner();
 
         // 1. Crea il semaforo (Signal per la Graphics Queue)
@@ -232,6 +226,4 @@ impl Core {
 
         Ok((transfer_complete_semaphore, transfer_fence))
     }
-
-
 }

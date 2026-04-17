@@ -1,12 +1,11 @@
-use std::{ffi::CStr, rc::Rc};
-use std::marker::PhantomData;
-use ash::vk;
 use crate::error::SrResult;
-use crate::vulkan_abstraction::{self, Core, DenoiseDescriptorSetLayout, PostProcessDescriptorSetLayout};
 use crate::vulkan_abstraction::TemporalAccumulationDescriptorSetLayout;
+use crate::vulkan_abstraction::{self, Core, DenoiseDescriptorSetLayout, PostProcessDescriptorSetLayout};
+use ash::vk;
+use std::marker::PhantomData;
+use std::{ffi::CStr, rc::Rc};
 
 const SHADER_ENTRY_POINT: &CStr = c"main";
-
 
 pub trait ComputeTypeDef {
     type PushConstant;
@@ -64,7 +63,7 @@ pub struct TemporalAccumulationPushConstant {
 #[allow(dead_code)] // read by the gpu
 #[repr(C, packed)]
 #[derive(Debug)]
-pub struct PostprocessPushConstant{
+pub struct PostprocessPushConstant {
     pub exposure: f32,
 }
 
@@ -76,11 +75,8 @@ pub struct ComputePipeline<T: ComputeTypeDef> {
     _marker: PhantomData<T>,
 }
 
-impl<T:ComputeTypeDef> ComputePipeline<T> {
-    pub fn new(
-        core: Rc<Core>,
-        descriptor_set_layout: vk::DescriptorSetLayout,
-    ) -> SrResult<Self> {
+impl<T: ComputeTypeDef> ComputePipeline<T> {
+    pub fn new(core: Rc<Core>, descriptor_set_layout: vk::DescriptorSetLayout) -> SrResult<Self> {
         let device = core.device().inner();
 
         // 1. Get the SPIR-V bytes from the trait implementation
@@ -88,8 +84,7 @@ impl<T:ComputeTypeDef> ComputePipeline<T> {
         let spirv_u32 = bytemuck::cast_slice(spirv_bytes);
 
         // 2. Create the Shader Module
-        let module_create_info = vk::ShaderModuleCreateInfo::default()
-            .code(spirv_u32);
+        let module_create_info = vk::ShaderModuleCreateInfo::default().code(spirv_u32);
 
         let shader_module = unsafe { device.create_shader_module(&module_create_info, None) }?;
 
@@ -104,10 +99,12 @@ impl<T:ComputeTypeDef> ComputePipeline<T> {
 
         // 1. Only create the range if the size is actually greater than 0
         let push_constant_ranges = if size > 0 {
-            vec![vk::PushConstantRange::default()
-                .stage_flags(vk::ShaderStageFlags::COMPUTE)
-                .offset(0)
-                .size(size)]
+            vec![
+                vk::PushConstantRange::default()
+                    .stage_flags(vk::ShaderStageFlags::COMPUTE)
+                    .offset(0)
+                    .size(size),
+            ]
         } else {
             // If it's a ZST, we provide an empty Vec
             Vec::new()
@@ -127,7 +124,8 @@ impl<T:ComputeTypeDef> ComputePipeline<T> {
             .layout(pipeline_layout);
 
         let pipelines = unsafe {
-            device.create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
+            device
+                .create_compute_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
                 .map_err(|(_, err)| {
                     // Clean up layout and module if creation fails
                     device.destroy_pipeline_layout(pipeline_layout, None);
@@ -171,7 +169,6 @@ impl<T: ComputeTypeDef> Drop for ComputePipeline<T> {
         unsafe {
             device.destroy_pipeline(self.pipeline, None);
             device.destroy_pipeline_layout(self.pipeline_layout, None);
-
         }
     }
 }

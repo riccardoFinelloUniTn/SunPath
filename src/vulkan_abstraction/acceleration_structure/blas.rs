@@ -1,3 +1,4 @@
+use std::ops::Range;
 use std::rc::Rc;
 
 use crate::error::*;
@@ -6,7 +7,7 @@ use crate::vulkan_abstraction::{Buffer, IndexBuffer, VertexBuffer};
 use ash::vk;
 use ash::vk::AccelerationStructureBuildRangeInfoKHR;
 
-pub struct BlasInstance<'a,> {
+pub struct BlasInstance<'a> {
     pub blas: &'a vulkan_abstraction::BLAS,
     pub transform: vk::TransformMatrixKHR,
     pub blas_instance_index: u32, // contains the index of the instance, NOT of the blas, so we can fetch instance-specific information in the shader, by passing it as gl_InstanceCustomIndexEXT
@@ -39,6 +40,9 @@ pub struct BLAS {
     #[allow(unused)]
     is_dirty: bool,
     pub state: BlasState,
+    /// Ranges into the global blas_emissive_triangles buffer (local-space, per-BLAS).
+    /// One range per primitive that has emissive triangles.
+    pub emissive_triangle_ranges: Vec<Range<u32>>,
 }
 //TODO for nopw it can only have one geometry per blas
 impl BLAS {
@@ -64,7 +68,6 @@ impl BLAS {
         // there must be one build_range_info for each geometry
         let build_range_info = Self::make_build_range_info(&index_buffer);
 
-
         let blas = vulkan_abstraction::AccelerationStructure::new(
             core,
             vk::AccelerationStructureTypeKHR::BOTTOM_LEVEL,
@@ -79,11 +82,10 @@ impl BLAS {
             vertex_buffer,
             index_buffer,
             is_dirty: false,
-            state : BlasState::Optimal,
+            state: BlasState::Optimal,
+            emissive_triangle_ranges: Vec::new(),
         })
     }
-
-
 
     fn make_geometry<'a>(vertex_buffer: &VertexBuffer, index_buffer: &IndexBuffer) -> vk::AccelerationStructureGeometryKHR<'a> {
         let geometry_data = vk::AccelerationStructureGeometryDataKHR {
@@ -113,8 +115,6 @@ impl BLAS {
         index_buffer: vulkan_abstraction::IndexBuffer,
         fast_build: bool,
     ) -> SrResult<()> {
-
-
         let geometry = Self::make_geometry(&vertex_buffer, &index_buffer);
 
         let build_range_info = Self::make_build_range_info(&index_buffer);
@@ -125,7 +125,6 @@ impl BLAS {
     }
 
     fn make_build_range_info(index_buffer: &IndexBuffer) -> AccelerationStructureBuildRangeInfoKHR {
-
         let build_range_info = vk::AccelerationStructureBuildRangeInfoKHR::default()
             // the value of first_vertex is added to index values before fetching verts
             .first_vertex(0u32)
@@ -139,9 +138,14 @@ impl BLAS {
     }
 
     #[allow(unused)]
-    pub fn update(&mut self, vertex_buffer: vulkan_abstraction::VertexBuffer,
-                  index_buffer: vulkan_abstraction::IndexBuffer, ) -> SrResult<()> {
-        if !self.blas.allow_update { return SrResult::Err(SrError::new_custom("The structure is not updatable".to_string())); }
+    pub fn update(
+        &mut self,
+        vertex_buffer: vulkan_abstraction::VertexBuffer,
+        index_buffer: vulkan_abstraction::IndexBuffer,
+    ) -> SrResult<()> {
+        if !self.blas.allow_update {
+            return SrResult::Err(SrError::new_custom("The structure is not updatable".to_string()));
+        }
 
         let geometry = Self::make_geometry(&vertex_buffer, &index_buffer);
 
@@ -151,7 +155,6 @@ impl BLAS {
 
         Ok(())
     }
-
 
     pub fn inner(&self) -> vk::AccelerationStructureKHR {
         self.blas.inner()

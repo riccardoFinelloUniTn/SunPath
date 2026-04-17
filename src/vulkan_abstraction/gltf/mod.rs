@@ -7,6 +7,7 @@ use crate::{
 
 use nalgebra as na;
 
+pub mod emissive_triangle;
 pub mod image;
 pub mod material;
 pub mod mesh;
@@ -14,8 +15,8 @@ pub mod node;
 pub mod primitive;
 pub mod texture;
 pub mod vertex;
-pub mod emissive_triangle;
 
+pub use emissive_triangle::*;
 pub use image::*;
 pub use material::*;
 pub use mesh::*;
@@ -23,7 +24,6 @@ pub use node::*;
 pub use primitive::*;
 pub use texture::*;
 pub use vertex::*;
-pub use emissive_triangle::*;
 
 macro_rules! get_texture_indices {
     ($material:ident, $texture_name:ident) => {
@@ -224,9 +224,7 @@ impl Gltf {
                 let alpha_mode = material.alpha_mode();
                 let alpha_cutoff = material.alpha_cutoff().unwrap_or(0.5);
                 let double_sided = material.double_sided();
-                let transmission_factor = material
-                    .transmission()
-                    .map_or(0.0, |t| t.transmission_factor());
+                let transmission_factor = material.transmission().map_or(0.0, |t| t.transmission_factor());
 
                 let ior = material.ior().unwrap_or(1.5);
 
@@ -330,8 +328,7 @@ impl Gltf {
                         indices
                     };
 
-                    let index_buffer =
-                        vulkan_abstraction::IndexBuffer::new_for_blas_from_data(Rc::clone(&self.core), &indices)?;
+                    let index_buffer = vulkan_abstraction::IndexBuffer::new_for_blas_from_data(Rc::clone(&self.core), &indices)?;
 
                     index_buffer
                 };
@@ -357,7 +354,7 @@ impl Gltf {
             primitives.push(vulkan_abstraction::gltf::Primitive {
                 unique_key: primitive_unique_key,
                 material,
-                local_emissive_triangles
+                local_emissive_triangles,
             });
         }
 

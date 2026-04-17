@@ -7,8 +7,8 @@ use std::rc::Rc;
 
 use ash::vk;
 
-use crate::{error::SrResult, utils, vulkan_abstraction};
 use crate::vulkan_abstraction::Buffer;
+use crate::{error::SrResult, utils, vulkan_abstraction};
 
 pub struct Image {
     core: Rc<vulkan_abstraction::Core>,
@@ -134,7 +134,7 @@ impl Image {
 
     // copies from a staging buffer mainly useful to copy from a staging buffer to a device buffer
     // note that this function internally changes the image's layout to TRANSFER_DST_OPTIMAL
-    pub fn copy_from_buffer(&mut self, src: & impl Buffer ) -> SrResult<()> {
+    pub fn copy_from_buffer(&mut self, src: &impl Buffer) -> SrResult<()> {
         if src.is_null() {
             return Ok(());
         }

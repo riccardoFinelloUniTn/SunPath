@@ -18,7 +18,7 @@ pub struct Device {
     physical_device_rt_pipeline_properties: vk::PhysicalDeviceRayTracingPipelinePropertiesKHR<'static>,
     physical_device_acceleration_structure_properties: vk::PhysicalDeviceAccelerationStructurePropertiesKHR<'static>,
     graphics_queue_family_index: u32,
-    transfer_queue_family_index:Option<u32>,
+    transfer_queue_family_index: Option<u32>,
     surface_support_details: Option<RefCell<SurfaceSupportDetails>>,
 }
 
@@ -87,9 +87,7 @@ impl Device {
                     },
                 )
                 .ok_or(SrError::new_custom("No suitable GPU found!".to_string()))?;
-        
-        
-        
+
         let device = {
             let graphics_priorities = [1.0];
             let transfer_priorities = [0.5];
@@ -99,20 +97,20 @@ impl Device {
             queue_create_infos.push(
                 vk::DeviceQueueCreateInfo::default()
                     .queue_family_index(graphics_queue_family_index)
-                    .queue_priorities(&graphics_priorities)
+                    .queue_priorities(&graphics_priorities),
             );
 
-            if let Some(actual_transfer_queue_family_index)  = transfer_queue_family_index  && graphics_queue_family_index != actual_transfer_queue_family_index {
+            if let Some(actual_transfer_queue_family_index) = transfer_queue_family_index
+                && graphics_queue_family_index != actual_transfer_queue_family_index
+            {
                 queue_create_infos.push(
                     vk::DeviceQueueCreateInfo::default()
                         .queue_family_index(actual_transfer_queue_family_index)
-                        .queue_priorities(&transfer_priorities)
+                        .queue_priorities(&transfer_priorities),
                 );
             }
 
-
-            let mut vk13_features = vk::PhysicalDeviceVulkan13Features::default()
-                .synchronization2(true);
+            let mut vk13_features = vk::PhysicalDeviceVulkan13Features::default().synchronization2(true);
             // enable some device features necessary for ray-tracing //TODO I may need some newer feature expecially for the semi-binding?
             let mut vk12_features = vk::PhysicalDeviceVulkan12Features::default()
                 .buffer_device_address(true) // necessary for ray-tracing
