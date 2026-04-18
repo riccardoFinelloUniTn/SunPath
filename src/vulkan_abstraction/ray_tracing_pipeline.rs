@@ -37,13 +37,11 @@ impl RayTracingPipeline {
 
         let make_shader_stage_create_info =
             |stage: vk::ShaderStageFlags, spirv: &[u8]| -> SrResult<vk::PipelineShaderStageCreateInfo> {
-
                 let spirv_u32 = bytemuck::cast_slice(spirv);
 
                 let module_create_info = vk::ShaderModuleCreateInfo::default()
                     .flags(vk::ShaderModuleCreateFlags::empty())
                     .code(spirv_u32);
-
 
                 let module = unsafe { device.create_shader_module(&module_create_info, None) }?;
 
@@ -55,10 +53,7 @@ impl RayTracingPipeline {
                 Ok(stage_create_info)
             };
 
-        let ray_gen_stage_create_info = make_shader_stage_create_info(
-            vk::ShaderStageFlags::RAYGEN_KHR,
-            ray_gen_spirv
-        )?;
+        let ray_gen_stage_create_info = make_shader_stage_create_info(vk::ShaderStageFlags::RAYGEN_KHR, ray_gen_spirv)?;
 
         let ray_miss_stage_create_info = make_shader_stage_create_info(
             vk::ShaderStageFlags::MISS_KHR,
@@ -119,7 +114,10 @@ impl RayTracingPipeline {
 
         let push_constants = [vk::PushConstantRange::default()
             .stage_flags(
-                vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::CLOSEST_HIT_KHR | vk::ShaderStageFlags::MISS_KHR| vk::ShaderStageFlags::ANY_HIT_KHR,
+                vk::ShaderStageFlags::RAYGEN_KHR
+                    | vk::ShaderStageFlags::CLOSEST_HIT_KHR
+                    | vk::ShaderStageFlags::MISS_KHR
+                    | vk::ShaderStageFlags::ANY_HIT_KHR,
             )
             .offset(0)
             .size(std::mem::size_of::<RaytracingPushConstant>() as u32)];
@@ -168,8 +166,6 @@ impl RayTracingPipeline {
         self.pipeline_layout
     }
 }
-
-
 
 impl Drop for RayTracingPipeline {
     fn drop(&mut self) {

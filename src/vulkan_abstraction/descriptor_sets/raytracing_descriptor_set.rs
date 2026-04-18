@@ -1,8 +1,8 @@
-use std::rc::Rc;
-use ash::vk;
 use crate::error::SrResult;
 use crate::vulkan_abstraction;
 use crate::vulkan_abstraction::TLAS;
+use ash::vk;
+use std::rc::Rc;
 
 pub struct RaytracingDescriptorSetLayout {
     descriptor_set_layout: vk::DescriptorSetLayout,
@@ -25,7 +25,6 @@ impl RaytracingDescriptorSetLayout {
     pub const RESERVOIR_BUFFER_A_BINDING: u32 = 11;
     pub const RESERVOIR_BUFFER_B_BINDING: u32 = 12;
     pub const NUMBER_OF_BINDINGS: usize = 13;
-
 
     pub const NUMBER_OF_SAMPLERS: u32 = vulkan_abstraction::ShaderDataBuffers::NUMBER_OF_SAMPLERS as u32;
 
@@ -97,7 +96,6 @@ impl RaytracingDescriptorSetLayout {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
-
             //ping pong buffers for ReSTIR
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::RESERVOIR_BUFFER_A_BINDING)
@@ -137,8 +135,6 @@ impl Drop for RaytracingDescriptorSetLayout {
     }
 }
 
-
-
 pub struct RaytracingDescriptorSets {
     descriptor_sets: Vec<vk::DescriptorSet>,
     descriptor_pool: vk::DescriptorPool,
@@ -173,11 +169,11 @@ impl RaytracingDescriptorSets {
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(1),
             vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::STORAGE_BUFFER)     //Meshes info + Emissive triangles + 2 ping pong Reservoir buffers
+                .ty(vk::DescriptorType::STORAGE_BUFFER) //Meshes info + Emissive triangles + 2 ping pong Reservoir buffers
                 .descriptor_count(4),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS + 1),       //The +1 is for the blue noise texture
+                .descriptor_count(RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS + 1), //The +1 is for the blue noise texture
         ];
 
         let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo::default()
@@ -269,9 +265,6 @@ impl RaytracingDescriptorSets {
                 .dst_set(descriptor_sets[0])
                 .dst_binding(RaytracingDescriptorSetLayout::MOTION_VECTOR_BINDING),
         );
-
-
-
 
         // write matrices uniform buffer to descriptor set
         let descriptor_buffer_infos = [vk::DescriptorBufferInfo::default()

@@ -1,5 +1,5 @@
-use std::rc::Rc;
 use std::collections::HashSet;
+use std::rc::Rc;
 use std::time::Instant;
 
 use ash::vk;
@@ -94,7 +94,7 @@ impl App {
         let (mut renderer, surface) =
             sunray::Renderer::new_with_surface(size, vk::Format::R8G8B8A8_SRGB, instance_exts, &create_surface)?;
 
-        renderer.load_gltf("examples/assets/heavy_models/Room.glb")?;
+        renderer.load_gltf("examples/assets/Room.glb")?;
 
         //take ownership of the surface
         let surface = surface::Surface::new(renderer.core().entry(), renderer.core().instance(), surface);
@@ -270,23 +270,40 @@ impl App {
 
         // --- UPDATE CAMERA LOGIC ---
         let base_speed = 3.0;
-        let speed = if self.keys_down.contains(&KeyCode::ShiftLeft) { base_speed * 3.0 } else { base_speed };
+        let speed = if self.keys_down.contains(&KeyCode::ShiftLeft) {
+            base_speed * 3.0
+        } else {
+            base_speed
+        };
         let move_dist = speed * dt;
 
         let forward = na::Vector3::new(
             self.camera_yaw.cos() * self.camera_pitch.cos(),
             self.camera_pitch.sin(),
             self.camera_yaw.sin() * self.camera_pitch.cos(),
-        ).normalize();
+        )
+        .normalize();
 
         let right = forward.cross(&na::Vector3::new(0.0, 1.0, 0.0)).normalize();
 
-        if self.keys_down.contains(&KeyCode::KeyW) { self.camera_pos += forward * move_dist; }
-        if self.keys_down.contains(&KeyCode::KeyS) { self.camera_pos -= forward * move_dist; }
-        if self.keys_down.contains(&KeyCode::KeyD) { self.camera_pos += right * move_dist; }
-        if self.keys_down.contains(&KeyCode::KeyA) { self.camera_pos -= right * move_dist; }
-        if self.keys_down.contains(&KeyCode::Space) { self.camera_pos += na::Vector3::new(0.0, 1.0, 0.0) * move_dist; }
-        if self.keys_down.contains(&KeyCode::ControlLeft) { self.camera_pos -= na::Vector3::new(0.0, 1.0, 0.0) * move_dist; }
+        if self.keys_down.contains(&KeyCode::KeyW) {
+            self.camera_pos += forward * move_dist;
+        }
+        if self.keys_down.contains(&KeyCode::KeyS) {
+            self.camera_pos -= forward * move_dist;
+        }
+        if self.keys_down.contains(&KeyCode::KeyD) {
+            self.camera_pos += right * move_dist;
+        }
+        if self.keys_down.contains(&KeyCode::KeyA) {
+            self.camera_pos -= right * move_dist;
+        }
+        if self.keys_down.contains(&KeyCode::Space) {
+            self.camera_pos += na::Vector3::new(0.0, 1.0, 0.0) * move_dist;
+        }
+        if self.keys_down.contains(&KeyCode::ControlLeft) {
+            self.camera_pos -= na::Vector3::new(0.0, 1.0, 0.0) * move_dist;
+        }
 
         let target = self.camera_pos + forward;
 
@@ -388,11 +405,16 @@ impl App {
                 }
             }
             // --- MOUSE LOCK ACTIVATION ---
-            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } => {
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
                 self.mouse_captured = true;
                 if let Some(window) = &self.window {
                     // Confined works best on Windows, Locked works best on Mac/Linux. We fallback if one fails.
-                    let _ = window.set_cursor_grab(CursorGrabMode::Confined)
+                    let _ = window
+                        .set_cursor_grab(CursorGrabMode::Confined)
                         .or_else(|_| window.set_cursor_grab(CursorGrabMode::Locked));
                     window.set_cursor_visible(false);
                 }

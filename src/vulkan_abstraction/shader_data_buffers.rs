@@ -59,7 +59,6 @@ impl From<&vulkan_abstraction::gltf::Material> for Material {
             gltf::material::AlphaMode::Blend => 2,
         };
 
-
         Self {
             base_color_value: material.pbr_metallic_roughness_properties.base_color_factor,
             base_color_texture_index: to_texture_index(material.pbr_metallic_roughness_properties.base_color_texture_index),
@@ -77,7 +76,7 @@ impl From<&vulkan_abstraction::gltf::Material> for Material {
                 material.emissive_factor[0],
                 material.emissive_factor[1],
                 material.emissive_factor[2],
-                material.emissive_strength
+                material.emissive_strength,
             ],
             emissive_texture_index: to_texture_index(material.emissive_texture_index),
 
@@ -85,7 +84,7 @@ impl From<&vulkan_abstraction::gltf::Material> for Material {
             alpha_cutoff: material.alpha_cutoff,
             transmission_factor: material.transmission_factor,
             ior: material.ior,
-            _end_padding: [0;3],
+            _end_padding: [0; 3],
             _padding: [0.0; 2],
         }
     }
@@ -130,16 +129,15 @@ impl ShaderDataBuffers {
             view_inverse,
             proj_inverse,
             view_proj,
-            prev_view_proj
+            prev_view_proj,
         }: CameraMatrices,
     ) -> SrResult<()> {
-
         let mem = self.matrices_uniform_buffer.map::<MatricesBufferContents>()?;
         mem[0] = MatricesBufferContents {
             view_inverse,
             proj_inverse,
             view_proj,
-            prev_view_proj
+            prev_view_proj,
         };
 
         Ok(())
@@ -163,10 +161,7 @@ impl ShaderDataBuffers {
         Ok(())
     }
 
-    fn set_emissive_triangles(
-        &mut self,
-        emissive_triangles: &[vulkan_abstraction::gltf::EmissiveTriangle],
-    ) -> SrResult<()> {
+    fn set_emissive_triangles(&mut self, emissive_triangles: &[vulkan_abstraction::gltf::EmissiveTriangle]) -> SrResult<()> {
         if emissive_triangles.is_empty() {
             //1-element dummy buffer of zeroes if there are no lights
             let dummy = [vulkan_abstraction::gltf::EmissiveTriangle {
@@ -257,18 +252,17 @@ impl ShaderDataBuffers {
     }
 }
 
-
 /// Represents a single light candidate reservoir for Spatiotemporal Reservoir Resampling (ReSTIR).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Reservoir {
     /// The index of the winning light candidate in the emissive triangles array.
     pub light_idx: u32,
-    pub _pad0: [u32; 3],        // std430 vec3 alignment forces offset to 16
-    
+    pub _pad0: [u32; 3], // std430 vec3 alignment forces offset to 16
+
     /// The exact 3D world position on the light source that was sampled.
     pub light_pos: [f32; 3],
-    pub _pad1: f32,             // std430 vec3 alignment forces offset to 32
+    pub _pad1: f32, // std430 vec3 alignment forces offset to 32
 
     /// The 3D world normal of the light source at the sampled position.
     pub light_normal: [f32; 3],
@@ -278,5 +272,5 @@ pub(crate) struct Reservoir {
     pub m: f32,
     /// The final unbiased probabilistic weight of this reservoir, used to scale the final shadow ray.
     pub w: f32,
-    pub _pad2: [u32; 2],        // Pad out to exactly 64 bytes total
+    pub _pad2: [u32; 2], // Pad out to exactly 64 bytes total
 }

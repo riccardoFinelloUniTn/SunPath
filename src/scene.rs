@@ -38,7 +38,7 @@ impl Scene {
         Vec<vulkan_abstraction::gltf::Texture>,
         Vec<vulkan_abstraction::image::Sampler>,
         Vec<vulkan_abstraction::Image>,
-        Vec<vulkan_abstraction::gltf::EmissiveTriangle>
+        Vec<vulkan_abstraction::gltf::EmissiveTriangle>,
     )> {
         blases.clear();
 
@@ -92,7 +92,14 @@ impl Scene {
 
         let images: Result<Vec<_>, _> = scene_data.images.into_iter().map(|image| to_vk_image(core, image)).collect();
 
-        Ok((blas_instances, materials, scene_data.textures, samplers?, images?, emissive_triangles))
+        Ok((
+            blas_instances,
+            materials,
+            scene_data.textures,
+            samplers?,
+            images?,
+            emissive_triangles,
+        ))
     }
 
     fn explore_node(
@@ -104,7 +111,7 @@ impl Scene {
         primitives_blas_index: &mut HashMap<vulkan_abstraction::gltf::PrimitiveUniqueKey, usize>,
         materials: &mut Vec<vulkan_abstraction::gltf::Material>,
         scene_data: &mut crate::SceneData,
-        emissive_triangles: &mut Vec<vulkan_abstraction::gltf::EmissiveTriangle>
+        emissive_triangles: &mut Vec<vulkan_abstraction::gltf::EmissiveTriangle>,
     ) -> SrResult<()> {
         if let Some(mesh) = node.mesh() {
             for primitive in mesh.primitives() {
@@ -137,7 +144,7 @@ impl Scene {
                         material.emissive_factor[0] * material.emissive_strength,
                         material.emissive_factor[1] * material.emissive_strength,
                         material.emissive_factor[2] * material.emissive_strength,
-                        0.0
+                        0.0,
                     ];
 
                     for local_tri in &primitive.local_emissive_triangles {

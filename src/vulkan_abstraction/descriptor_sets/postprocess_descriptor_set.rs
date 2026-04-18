@@ -1,7 +1,7 @@
-use std::rc::Rc;
-use ash::vk;
 use crate::error::SrResult;
 use crate::vulkan_abstraction;
+use ash::vk;
+use std::rc::Rc;
 
 pub struct PostprocessDescriptorSetLayout {
     descriptor_set_layout: vk::DescriptorSetLayout,
@@ -22,7 +22,6 @@ impl PostprocessDescriptorSetLayout {
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
-
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::OUTPUT_IMAGE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
@@ -30,14 +29,9 @@ impl PostprocessDescriptorSetLayout {
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
         ];
 
+        let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
 
-
-        let create_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .bindings(&bindings);
-
-        let descriptor_set_layout = unsafe {
-            device.create_descriptor_set_layout(&create_info, None)?
-        };
+        let descriptor_set_layout = unsafe { device.create_descriptor_set_layout(&create_info, None)? };
 
         Ok(Self {
             descriptor_set_layout,
@@ -53,7 +47,10 @@ impl PostprocessDescriptorSetLayout {
 impl Drop for PostprocessDescriptorSetLayout {
     fn drop(&mut self) {
         unsafe {
-            self.core.device().inner().destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            self.core
+                .device()
+                .inner()
+                .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
         }
     }
 }
@@ -75,15 +72,11 @@ impl PostProcessDescriptorSets {
         let device = core.device().inner();
 
         // 1. We now need 4 storage image descriptors total (2 bindings * 2 sets)
-        let pool_sizes = [
-            vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::STORAGE_IMAGE)
-                .descriptor_count(4),
-        ];
+        let pool_sizes = [vk::DescriptorPoolSize::default()
+            .ty(vk::DescriptorType::STORAGE_IMAGE)
+            .descriptor_count(4)];
 
-        let pool_info = vk::DescriptorPoolCreateInfo::default()
-            .pool_sizes(&pool_sizes)
-            .max_sets(2); // Allocate 2 sets
+        let pool_info = vk::DescriptorPoolCreateInfo::default().pool_sizes(&pool_sizes).max_sets(2); // Allocate 2 sets
 
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None)? };
 
@@ -115,20 +108,17 @@ impl PostProcessDescriptorSets {
                 .dst_binding(PostprocessDescriptorSetLayout::INPUT_IMAGE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(std::slice::from_ref(&input_info_0)),
-
             vk::WriteDescriptorSet::default()
                 .dst_set(descriptor_sets[0])
                 .dst_binding(PostprocessDescriptorSetLayout::OUTPUT_IMAGE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(std::slice::from_ref(&output_info)),
-
             // --- SET 1 (Reads from Denoise Pong) ---
             vk::WriteDescriptorSet::default()
                 .dst_set(descriptor_sets[1])
                 .dst_binding(PostprocessDescriptorSetLayout::INPUT_IMAGE)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .image_info(std::slice::from_ref(&input_info_1)),
-
             vk::WriteDescriptorSet::default()
                 .dst_set(descriptor_sets[1])
                 .dst_binding(PostprocessDescriptorSetLayout::OUTPUT_IMAGE)
@@ -156,6 +146,3 @@ impl Drop for PostProcessDescriptorSets {
         }
     }
 }
-
-
-

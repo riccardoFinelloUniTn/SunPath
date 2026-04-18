@@ -1,7 +1,7 @@
-use std::rc::Rc;
-use ash::vk;
 use crate::error::SrResult;
 use crate::vulkan_abstraction;
+use ash::vk;
+use std::rc::Rc;
 
 pub struct DenoiseDescriptorSetLayout {
     descriptor_set_layout: vk::DescriptorSetLayout,
@@ -10,10 +10,10 @@ pub struct DenoiseDescriptorSetLayout {
 
 impl DenoiseDescriptorSetLayout {
     pub const INPUT_BINDING: u32 = 0; // Input from Temporal Pass
-    pub const DEPTH_BINDING: u32 = 1;           // Edge preservation
-    pub const NORMAL_BINDING: u32 = 2;          // Edge preservation
-    pub const DIFFUSE_BINDING: u32 = 3;         //edge preservation
-    pub const FINAL_OUTPUT_BINDING: u32 = 4;    // Final image to the screen
+    pub const DEPTH_BINDING: u32 = 1; // Edge preservation
+    pub const NORMAL_BINDING: u32 = 2; // Edge preservation
+    pub const DIFFUSE_BINDING: u32 = 3; //edge preservation
+    pub const FINAL_OUTPUT_BINDING: u32 = 4; // Final image to the screen
 
     pub const NUMBER_OF_BINDINGS: usize = 5;
 
@@ -26,26 +26,21 @@ impl DenoiseDescriptorSetLayout {
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
-
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::DEPTH_BINDING)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
-
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::NORMAL_BINDING)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
-
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::DIFFUSE_BINDING)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
-
-
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::FINAL_OUTPUT_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
@@ -53,12 +48,9 @@ impl DenoiseDescriptorSetLayout {
                 .stage_flags(vk::ShaderStageFlags::COMPUTE),
         ];
 
-        let create_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .bindings(&bindings);
+        let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
 
-        let descriptor_set_layout = unsafe {
-            device.create_descriptor_set_layout(&create_info, None)?
-        };
+        let descriptor_set_layout = unsafe { device.create_descriptor_set_layout(&create_info, None)? };
 
         Ok(Self {
             descriptor_set_layout,
@@ -81,8 +73,6 @@ impl Drop for DenoiseDescriptorSetLayout {
         }
     }
 }
-
-
 
 /// Wrapper struct for the denoise pass descriptor set
 pub struct DenoiseDescriptorSets {
@@ -109,14 +99,12 @@ impl DenoiseDescriptorSets {
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_IMAGE)
                 .descriptor_count(6),
-                vk::DescriptorPoolSize::default()
+            vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(9),
         ];
 
-        let pool_info = vk::DescriptorPoolCreateInfo::default()
-            .pool_sizes(&pool_sizes)
-            .max_sets(3);
+        let pool_info = vk::DescriptorPoolCreateInfo::default().pool_sizes(&pool_sizes).max_sets(3);
 
         let descriptor_pool = unsafe { device.create_descriptor_pool(&pool_info, None)? };
 
@@ -157,22 +145,67 @@ impl DenoiseDescriptorSets {
         // --- SET 0: Initial Pass (Temporal 0 -> Denoise 0) ---
         // Note: You can swap temp_0 for temp_1 based on frame_count in the caller,
         // or just update this specific binding every frame.
-        writes.push(self::create_write(descriptor_sets[0], DenoiseDescriptorSetLayout::INPUT_BINDING, &temp_0, vk::DescriptorType::STORAGE_IMAGE));
-        writes.push(self::create_write(descriptor_sets[0], DenoiseDescriptorSetLayout::FINAL_OUTPUT_BINDING, &denoise_0,  vk::DescriptorType::STORAGE_IMAGE));
+        writes.push(self::create_write(
+            descriptor_sets[0],
+            DenoiseDescriptorSetLayout::INPUT_BINDING,
+            &temp_0,
+            vk::DescriptorType::STORAGE_IMAGE,
+        ));
+        writes.push(self::create_write(
+            descriptor_sets[0],
+            DenoiseDescriptorSetLayout::FINAL_OUTPUT_BINDING,
+            &denoise_0,
+            vk::DescriptorType::STORAGE_IMAGE,
+        ));
 
         // --- SET 1: Ping-Pong A (Denoise 0 -> Denoise 1) ---
-        writes.push(self::create_write(descriptor_sets[1], DenoiseDescriptorSetLayout::INPUT_BINDING, &denoise_0,  vk::DescriptorType::STORAGE_IMAGE));
-        writes.push(self::create_write(descriptor_sets[1], DenoiseDescriptorSetLayout::FINAL_OUTPUT_BINDING, &denoise_1,  vk::DescriptorType::STORAGE_IMAGE));
+        writes.push(self::create_write(
+            descriptor_sets[1],
+            DenoiseDescriptorSetLayout::INPUT_BINDING,
+            &denoise_0,
+            vk::DescriptorType::STORAGE_IMAGE,
+        ));
+        writes.push(self::create_write(
+            descriptor_sets[1],
+            DenoiseDescriptorSetLayout::FINAL_OUTPUT_BINDING,
+            &denoise_1,
+            vk::DescriptorType::STORAGE_IMAGE,
+        ));
 
         // --- SET 2: Ping-Pong B (Denoise 1 -> Denoise 0) ---
-        writes.push(self::create_write(descriptor_sets[2], DenoiseDescriptorSetLayout::INPUT_BINDING, &denoise_1,  vk::DescriptorType::STORAGE_IMAGE));
-        writes.push(self::create_write(descriptor_sets[2], DenoiseDescriptorSetLayout::FINAL_OUTPUT_BINDING, &denoise_0,  vk::DescriptorType::STORAGE_IMAGE));
+        writes.push(self::create_write(
+            descriptor_sets[2],
+            DenoiseDescriptorSetLayout::INPUT_BINDING,
+            &denoise_1,
+            vk::DescriptorType::STORAGE_IMAGE,
+        ));
+        writes.push(self::create_write(
+            descriptor_sets[2],
+            DenoiseDescriptorSetLayout::FINAL_OUTPUT_BINDING,
+            &denoise_0,
+            vk::DescriptorType::STORAGE_IMAGE,
+        ));
 
         // Add Depth and Normal to all sets
         for &set in &descriptor_sets {
-            writes.push(self::create_write(set, DenoiseDescriptorSetLayout::DEPTH_BINDING, &depth_info, vk::DescriptorType::COMBINED_IMAGE_SAMPLER));
-            writes.push(self::create_write(set, DenoiseDescriptorSetLayout::NORMAL_BINDING, &normal_info,  vk::DescriptorType::COMBINED_IMAGE_SAMPLER));
-            writes.push(create_write(set, DenoiseDescriptorSetLayout::DIFFUSE_BINDING, &diffuse_info,  vk::DescriptorType::COMBINED_IMAGE_SAMPLER))
+            writes.push(self::create_write(
+                set,
+                DenoiseDescriptorSetLayout::DEPTH_BINDING,
+                &depth_info,
+                vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            ));
+            writes.push(self::create_write(
+                set,
+                DenoiseDescriptorSetLayout::NORMAL_BINDING,
+                &normal_info,
+                vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            ));
+            writes.push(create_write(
+                set,
+                DenoiseDescriptorSetLayout::DIFFUSE_BINDING,
+                &diffuse_info,
+                vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            ))
         }
 
         unsafe { device.update_descriptor_sets(&writes, &[]) };
@@ -190,7 +223,12 @@ impl DenoiseDescriptorSets {
 }
 
 // Helper function to keep the code clean
-fn create_write<'a>(set: vk::DescriptorSet, binding: u32, info: &'a vk::DescriptorImageInfo, d_type: vk::DescriptorType) -> vk::WriteDescriptorSet<'a> {
+fn create_write<'a>(
+    set: vk::DescriptorSet,
+    binding: u32,
+    info: &'a vk::DescriptorImageInfo,
+    d_type: vk::DescriptorType,
+) -> vk::WriteDescriptorSet<'a> {
     vk::WriteDescriptorSet::default()
         .dst_set(set)
         .dst_binding(binding)
