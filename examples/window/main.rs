@@ -95,7 +95,7 @@ impl App {
                         vk::PipelineStageFlags::BOTTOM_OF_PIPE,
                         vk::AccessFlags::TRANSFER_WRITE,
                         vk::AccessFlags::empty(),
-                        vk::ImageLayout::UNDEFINED,
+                        vk::ImageLayout::GENERAL,
                         vk::ImageLayout::PRESENT_SRC_KHR,
                     );
 
@@ -198,7 +198,7 @@ impl App {
                         vk::PipelineStageFlags::BOTTOM_OF_PIPE,
                         vk::AccessFlags::TRANSFER_WRITE,
                         vk::AccessFlags::empty(),
-                        vk::ImageLayout::UNDEFINED,
+                        vk::ImageLayout::GENERAL,
                         vk::ImageLayout::PRESENT_SRC_KHR,
                     );
 
@@ -412,6 +412,8 @@ impl ApplicationHandler for App {
         self.start_time = Some(std::time::SystemTime::now());
         self.last_fps_check = Some(Instant::now());
         self.frames_since_check = 0;
+
+        self.window.as_ref().unwrap().request_redraw();
     }
 
     fn window_event(
