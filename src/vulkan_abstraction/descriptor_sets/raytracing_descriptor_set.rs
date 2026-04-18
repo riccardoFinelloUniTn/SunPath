@@ -22,7 +22,9 @@ impl RaytracingDescriptorSetLayout {
     pub const MOTION_VECTOR_BINDING: u32 = 8;
     pub const EMISSIVE_TRIANGLES_BINDING: u32 = 9;
     pub const BLUE_NOISE_BINDING: u32 = 10;
-    pub const NUMBER_OF_BINDINGS: usize = 11;
+    pub const EMISSIVE_INDIRECTION_BINDING: u32 = 11;
+    pub const ENTITY_TRANSFORMS_BINDING: u32 = 12;
+    pub const NUMBER_OF_BINDINGS: usize = 13;
 
     pub const NUMBER_OF_SAMPLERS: u32 = vulkan_abstraction::ShaderDataBuffers::NUMBER_OF_SAMPLERS as u32;
 
@@ -94,6 +96,18 @@ impl RaytracingDescriptorSetLayout {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+            // Emissive indirection buffer (dense NEE sampling entries)
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::EMISSIVE_INDIRECTION_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+            // Entity transforms buffer (indexed by arena slot)
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::ENTITY_TRANSFORMS_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
         ];
 
         let descriptor_set_layout_create_info =
@@ -155,8 +169,8 @@ impl RaytracingDescriptorSets {
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(1),
             vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::STORAGE_BUFFER) //Meshes info + Emissive triangles
-                .descriptor_count(2),
+                .ty(vk::DescriptorType::STORAGE_BUFFER) //Meshes info + Emissive triangles + Indirection + Entity transforms
+                .descriptor_count(4),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS + 1), //The +1 is for the blue noise texture
@@ -285,6 +299,30 @@ impl RaytracingDescriptorSets {
                 .buffer_info(&emissive_buffer_infos)
                 .dst_set(descriptor_sets[0])
                 .dst_binding(RaytracingDescriptorSetLayout::EMISSIVE_TRIANGLES_BINDING),
+        );
+
+        // write emissive indirection buffer
+        let indirection_buffer_infos = [vk::DescriptorBufferInfo::default()
+            .buffer(shader_data.get_emissive_indirection_buffer())
+            .range(vk::WHOLE_SIZE)];
+        push_write(
+            vk::WriteDescriptorSet::default()
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&indirection_buffer_infos)
+                .dst_set(descriptor_sets[0])
+                .dst_binding(RaytracingDescriptorSetLayout::EMISSIVE_INDIRECTION_BINDING),
+        );
+
+        // write entity transforms buffer
+        let entity_transforms_infos = [vk::DescriptorBufferInfo::default()
+            .buffer(shader_data.get_entity_transforms_buffer())
+            .range(vk::WHOLE_SIZE)];
+        push_write(
+            vk::WriteDescriptorSet::default()
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&entity_transforms_infos)
+                .dst_set(descriptor_sets[0])
+                .dst_binding(RaytracingDescriptorSetLayout::ENTITY_TRANSFORMS_BINDING),
         );
 
         // write samplers to descriptor set

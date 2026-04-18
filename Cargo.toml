@@ -26,7 +26,7 @@ image = "0.25.8"
 shaderc = "0.10.1"
 
 [dev-dependencies]
-winit = { version = "0.30.9", features = ["rwh_05"] } #window example
+winit = { version = "0.30.13", features = ["rwh_05" , "wayland"] } #window example
 log4rs = "1.4.0" #logging for examples
 image = "0.25.8" #png example
 

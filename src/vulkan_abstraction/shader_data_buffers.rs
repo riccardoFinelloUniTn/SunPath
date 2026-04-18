@@ -97,19 +97,6 @@ struct MeshesInfoBufferContents { //TODO I want to extract this from the entity 
     material: Material,
 }
 
-/// 3x4 row-major transform for shader access (same layout as vk::TransformMatrixKHR).
-#[derive(Clone, Copy)]
-#[repr(C)]
-struct EntityTransformGpu { //TODO i'll just use vk matrix
-    matrix: [f32; 12],
-}
-
-
-impl From<vk::TransformMatrixKHR> for EntityTransformGpu {
-    fn from(t: vk::TransformMatrixKHR) -> Self {
-        Self { matrix: t.matrix }
-    }
-}
 
 // ─── Resource Manager ────────────────────────────────────────────────────────
 
@@ -130,7 +117,7 @@ pub(crate) struct ShaderDataBuffers {
     next_entity_id: u64,
 
     // Entity transforms for shader access (indexed by arena slot, CPU-mapped storage buffer)
-    entity_transforms: vulkan_abstraction::StagingBuffer<EntityTransformGpu>,
+    entity_transforms: vulkan_abstraction::StagingBuffer<vk::TransformMatrixKHR>,
 
     // Emissive lighting — local-space triangles stored per-BLAS
     //TODO wtf are this two separate and not an arena buffer
@@ -235,7 +222,7 @@ impl ShaderDataBuffers {
 
         // Write transform to the CPU-mapped transforms buffer
         let transforms = self.entity_transforms.map_mut()?;
-        transforms[arena_slot] = EntityTransformGpu::from(transform);
+        transforms[arena_slot] = transform;
 
         // Flush meshes_info to GPU (blocking)
         self.flush_single_copy(
@@ -267,7 +254,7 @@ impl ShaderDataBuffers {
         if let Some(entity) = self.entities.get_mut(&id.0) {
             entity.transform = transform;
             let transforms = self.entity_transforms.map_mut()?;
-            transforms[entity.arena_slot] = EntityTransformGpu::from(transform);
+            transforms[entity.arena_slot] = transform;
         }
         Ok(())
     }

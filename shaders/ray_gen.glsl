@@ -228,11 +228,31 @@ void main() {
             }
 
 
-            uint num_lights = emissive_triangles.length();
+            uint num_lights = emissive_indirection.length();
             if (num_lights > 0 && bounce < SHADOW_BOUNCES  && roughness > 0.2) {
-                // Pick a random light triangle
+                // Pick a random entry from the dense indirection buffer
                 uint light_idx = min(uint(rnd() * num_lights), num_lights - 1);
-                emissive_triangle_t light = emissive_triangles[light_idx];
+                emissive_indirection_entry_t entry = emissive_indirection[light_idx];
+
+                // Fetch local-space triangle and entity transform
+                emissive_triangle_t light = emissive_triangles[entry.blas_tri_index];
+                entity_transform_t xform = entity_transforms[entry.entity_id];
+
+                // Transform vertices from local space to world space
+                vec3 wv0 = vec3(dot(xform.rows[0], vec4(light.v0.xyz, 1.0)),
+                                dot(xform.rows[1], vec4(light.v0.xyz, 1.0)),
+                                dot(xform.rows[2], vec4(light.v0.xyz, 1.0)));
+                vec3 wv1 = vec3(dot(xform.rows[0], vec4(light.v1.xyz, 1.0)),
+                                dot(xform.rows[1], vec4(light.v1.xyz, 1.0)),
+                                dot(xform.rows[2], vec4(light.v1.xyz, 1.0)));
+                vec3 wv2 = vec3(dot(xform.rows[0], vec4(light.v2.xyz, 1.0)),
+                                dot(xform.rows[1], vec4(light.v2.xyz, 1.0)),
+                                dot(xform.rows[2], vec4(light.v2.xyz, 1.0)));
+
+                // Compute world-space area from cross product
+                vec3 edge1 = wv1 - wv0;
+                vec3 edge2 = wv2 - wv0;
+                float light_area = 0.5 * length(cross(edge1, edge2));
 
                 // Pick a random point on the triangle using barycentrics
                 float r1 = rnd();
@@ -242,8 +262,8 @@ void main() {
                 float v = r2 * sqr1;
                 float w = 1.0 - u - v;
 
-                vec3 light_pos = light.v0_area.xyz * u + light.v1.xyz * v + light.v2.xyz * w;
-                vec3 light_normal = normalize(cross(light.v1.xyz - light.v0_area.xyz, light.v2.xyz - light.v0_area.xyz));
+                vec3 light_pos = wv0 * u + wv1 * v + wv2 * w;
+                vec3 light_normal = normalize(cross(edge1, edge2));
 
                 // Setup the shadow ray
                 vec3 shadow_ray_dir = light_pos - hitPos;
@@ -254,7 +274,7 @@ void main() {
                 float cos_theta_light = max(dot(light_normal, -shadow_ray_dir), 0.0);
                 float cos_theta_surface = max(dot(hit_normal, shadow_ray_dir), 0.0);
 
-                if (cos_theta_light > 0.0 && cos_theta_surface > 0.0) {
+                if (cos_theta_light > 0.0 && cos_theta_surface > 0.0 && light_area > 0.0) {
                     uint ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT;
                     prd.dist = 1.0;
 
@@ -262,7 +282,6 @@ void main() {
 
                     // If it is < 0.0, ray_miss.glsl ran, meaning the light is visible
                     if (prd.dist < 0.0) {
-                        float light_area = light.v0_area.w;
                         float solid_angle_pdf = (light_dist * light_dist) / (cos_theta_light * light_area * float(num_lights));
                         radiance += (light.emission.rgb * hit_albedo * throughput * cos_theta_surface) / (solid_angle_pdf * 3.14159);
                     }

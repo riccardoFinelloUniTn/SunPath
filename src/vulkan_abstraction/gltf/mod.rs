@@ -350,7 +350,6 @@ impl Gltf {
 
                 primitive_data_map.insert(primitive_unique_key, primitive_data);
             }
-
             primitives.push(vulkan_abstraction::gltf::Primitive {
                 unique_key: primitive_unique_key,
                 material,
