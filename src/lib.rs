@@ -6,7 +6,6 @@ pub mod vulkan_abstraction;
 
 pub use camera::*;
 use error::*;
-use gpu_allocator::vulkan::Allocation;
 pub use scene::*;
 
 use std::{collections::HashMap, rc::Rc};
@@ -17,7 +16,7 @@ use crate::utils::env_var_as_bool;
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
 use crate::vulkan_abstraction::{
-    BlasInstance, BlasMetaData, Buffer, DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets,
+    DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets,
     PostprocessPass, TemporalPass,
 };
 
@@ -69,18 +68,7 @@ pub type CreateSurfaceFn = dyn Fn(&ash::Entry, &ash::Instance) -> SrResult<vk::S
 pub struct Renderer {
     image_dependant_data: HashMap<vk::Image, ImageDependentData>,
 
-    shader_data_buffers: vulkan_abstraction::ResourceManager,
-
-    blases: Vec<vulkan_abstraction::BLAS>,
-    tlas: vulkan_abstraction::TLAS,
-
-    is_tlas_dirty: bool,
-
-    instances_buffer: vulkan_abstraction::StagingBuffer<vk::AccelerationStructureInstanceKHR>,
-    cpu_instances_data: Vec<vulkan_abstraction::BlasMetaData>,
-
-    scene_images: Vec<vulkan_abstraction::Image>,
-    scene_samplers: Vec<vulkan_abstraction::Sampler>,
+    resource_manager: vulkan_abstraction::ResourceManager,
 
     shader_binding_table: vulkan_abstraction::ShaderBindingTable,
     ray_tracing_pipeline: vulkan_abstraction::RayTracingPipeline,
@@ -96,10 +84,6 @@ pub struct Renderer {
     temporal_accumulation_pipeline: vulkan_abstraction::ComputePipeline<TemporalPass>,
     denoise_pipeline: vulkan_abstraction::ComputePipeline<DenoisePass>,
     postprocess_pipeline: vulkan_abstraction::ComputePipeline<PostprocessPass>,
-
-    fallback_texture_image: vulkan_abstraction::Image,
-    fallback_texture_sampler: vulkan_abstraction::Sampler,
-    default_sampler: vulkan_abstraction::Sampler,
 
     blue_noise_image: vulkan_abstraction::Image,
     blue_noise_sampler: vulkan_abstraction::Sampler,
@@ -151,20 +135,8 @@ impl Renderer {
 
         let image_extent = utils::tuple_to_extent3d(image_extent);
 
-        let mut instances_buffer = vulkan_abstraction::StagingBuffer::new(
-            Rc::clone(&core),
-            MAX_TLAS_INSTANCES as vk::DeviceSize,
-            vk::BufferUsageFlags::STORAGE_BUFFER
-                | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-                | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-            "Cpu side instances of blases",
-        )?; //TODO const value a caso
-
-        let blases = vec![];
-        let tlas = vulkan_abstraction::TLAS::new(Rc::clone(&core), &[], &mut instances_buffer)?;
-
         //must be filled by loading a scene
-        let shader_data_buffers = vulkan_abstraction::ResourceManager::new_empty(Rc::clone(&core))?;
+        let resource_manager = vulkan_abstraction::ResourceManager::new_empty(Rc::clone(&core))?;
 
         let ray_tracing_descriptor_set_layout = vulkan_abstraction::RaytracingDescriptorSetLayout::new(Rc::clone(&core))?;
         let temporal_accumulation_descriptor_set_layout =
@@ -244,52 +216,6 @@ impl Renderer {
             vk::SamplerMipmapMode::NEAREST,
         )?;
 
-        let fallback_texture_image = {
-            const RESOLUTION: u32 = 64;
-            let image_data = utils::iterate_image_extent(RESOLUTION, RESOLUTION)
-                .map(|(x, y)| {
-                    // black/fucsia checkboard pattern
-                    if (x + y).is_multiple_of(2) { 0xff000000 } else { 0xffff00ff }
-                })
-                .map(u32::to_be_bytes)
-                .flatten()
-                .collect::<Vec<u8>>();
-
-            vulkan_abstraction::Image::new_from_data(
-                Rc::clone(&core),
-                image_data,
-                vk::Extent3D {
-                    width: RESOLUTION,
-                    height: RESOLUTION,
-                    depth: 1,
-                },
-                vk::Format::R8G8B8A8_UNORM,
-                vk::ImageTiling::OPTIMAL,
-                gpu_allocator::MemoryLocation::GpuOnly,
-                vk::ImageUsageFlags::SAMPLED,
-                "fallback texture image",
-            )?
-        };
-        let fallback_texture_sampler = vulkan_abstraction::Sampler::new(
-            Rc::clone(&core),
-            vk::Filter::NEAREST,
-            vk::Filter::NEAREST,
-            vk::SamplerAddressMode::REPEAT,
-            vk::SamplerAddressMode::REPEAT,
-            vk::SamplerAddressMode::REPEAT,
-            vk::SamplerMipmapMode::LINEAR,
-        )?;
-
-        let default_sampler = vulkan_abstraction::Sampler::new(
-            Rc::clone(&core),
-            vk::Filter::LINEAR,
-            vk::Filter::LINEAR,
-            vk::SamplerAddressMode::CLAMP_TO_EDGE,
-            vk::SamplerAddressMode::CLAMP_TO_EDGE,
-            vk::SamplerAddressMode::CLAMP_TO_EDGE,
-            vk::SamplerMipmapMode::LINEAR,
-        )?;
-
         Ok((
             Self {
                 image_dependant_data,
@@ -301,16 +227,6 @@ impl Renderer {
                 denoise_descriptor_set_layout,
                 postprocess_descriptor_set_layout,
 
-                blases,
-                tlas,
-
-                is_tlas_dirty: false,
-
-                instances_buffer,
-                cpu_instances_data: Vec::new(),
-
-                scene_images: Vec::new(),
-                scene_samplers: Vec::new(),
                 prev_view_proj: nalgebra::zero(),
 
                 image_extent,
@@ -327,11 +243,7 @@ impl Renderer {
                 blue_noise_image,
                 blue_noise_sampler,
 
-                fallback_texture_image,
-                fallback_texture_sampler,
-                default_sampler,
-
-                shader_data_buffers,
+                resource_manager,
 
                 core,
             },
@@ -561,7 +473,7 @@ impl Renderer {
             let raytracing_descriptor_sets = vulkan_abstraction::RaytracingDescriptorSets::new(
                 Rc::clone(&self.core),
                 &self.ray_tracing_descriptor_set_layout,
-                &self.tlas,
+                self.resource_manager.tlas(),
                 &raytrace_result_image, // Raw color output
                 &depth_image,           // G-Buffer Depth
                 &normal_image,          // G-Buffer Normals
@@ -569,7 +481,7 @@ impl Renderer {
                 &motion_vector_image,   // G-Buffer Motion
                 &self.blue_noise_image,
                 self.blue_noise_sampler.inner(),
-                &self.shader_data_buffers,
+                &self.resource_manager,
             )?;
 
             let temporal_accumulation_descriptor_sets = vulkan_abstraction::TemporalAccumulationDescriptorSets::new(
@@ -579,7 +491,7 @@ impl Renderer {
                 &motion_vector_image,      // Binding 1: Motion Vectors
                 &self.accumulation_images, // Binding 2: Ping-Pong Output (Storage)
                 &self.accumulation_images, // Binding 3: Ping-Pong History (Samplers)
-                self.default_sampler.inner(),
+                self.resource_manager.default_sampler().inner(),
             )?;
 
             let denoise_descriptor_sets = vulkan_abstraction::DenoiseDescriptorSets::new(
@@ -590,7 +502,7 @@ impl Renderer {
                 &normal_image,
                 &diffuse_image,
                 &self.denoising_images,
-                self.default_sampler.inner(),
+                self.resource_manager.default_sampler().inner(),
             )?;
 
             let postprocess_descriptor_sets = vulkan_abstraction::PostProcessDescriptorSets::new(
@@ -660,47 +572,8 @@ impl Renderer {
     }
 
     pub fn load_scene(&mut self, scene: &crate::Scene, scene_data: crate::SceneData) -> SrResult<()> {
-        let (blas_instances, blas_indices, materials, textures, samplers, images, emissive_triangles) =
-            scene.load_into_gpu(&self.core, &mut self.blases, scene_data)?;
-
-        // Set textures (doesn't need &self.blases)
-        let fallback_texture = vulkan_abstraction::Texture(&self.fallback_texture_image, &self.fallback_texture_sampler);
-        self.shader_data_buffers
-            .set_textures(&images, &samplers, &textures, fallback_texture, &self.default_sampler);
-
-        // TLAS rebuild (needs blas_instances which borrows self.blases)
-        self.tlas.rebuild(&blas_instances, &mut self.instances_buffer)?;
-
-        // Collect entity creation data and consume blas_instances (drops borrow on self.blases)
-        let entity_creation_data: Vec<_> = blas_instances
-            .iter()
-            .zip(blas_indices.iter())
-            .zip(materials.iter())
-            .map(|((bi, &blas_idx), mat)| (blas_idx, mat.clone(), bi.transform))
-            .collect();
-
-        self.cpu_instances_data = blas_instances
-            .into_iter()
-            .map(|blas_instance| BlasMetaData {
-                transform: blas_instance.transform,
-                blas_instance_index: blas_instance.blas_instance_index,
-            })
-            .collect();
-
-        // Now self.blases is free — feed emissive data and create entities
-        self.shader_data_buffers.add_blas_emissive_triangles(&emissive_triangles)?;
-
-        for (blas_idx, material, transform) in &entity_creation_data {
-            self.shader_data_buffers
-                .create_entity(&self.blases[*blas_idx], *blas_idx, material, *transform)?;
-        }
-
-        self.shader_data_buffers.rebuild_emissive_indirection(&self.blases)?;
-
-        self.scene_images = images;
-        self.scene_samplers = samplers;
+        self.resource_manager.load_scene(scene, scene_data)?;
         self.image_dependant_data = HashMap::new();
-
         Ok(())
     }
 
@@ -712,7 +585,7 @@ impl Renderer {
         let tmp = matrices.view_proj;
 
         // Upload the struct to the uniform buffer
-        self.shader_data_buffers.set_matrices(matrices)?;
+        self.resource_manager.set_matrices(matrices)?;
 
         // Save the current frame's matrix to use as history NEXT frame
         self.prev_view_proj = tmp;
@@ -1579,7 +1452,7 @@ impl Renderer {
 
     /// Updates the local CPU copy of an object's transform
     pub fn set_object_transform(&mut self, instance_id: usize, transform: nalgebra::Matrix4<f32>) {
-        if instance_id >= self.cpu_instances_data.len() {
+        if instance_id >= self.resource_manager.cpu_instances_data().len() {
             log::warn!("Attempted to update invalid instance ID: {}", instance_id);
             return;
         }
@@ -1602,58 +1475,21 @@ impl Renderer {
             ],
         };
 
-        self.cpu_instances_data[instance_id].transform = vk_transform;
+        self.resource_manager.cpu_instances_data_mut()[instance_id].transform = vk_transform;
 
         // Also update the entity transform in the resource manager (for emissive shader access)
         let entity_id = vulkan_abstraction::EntityId(instance_id as u64);
-        let _ = self.shader_data_buffers.set_entity_transform(entity_id, vk_transform);
+        let _ = self.resource_manager.set_entity_transform(entity_id, vk_transform);
     }
 
     /// Call this ONCE per frame before `render_to_image` to update blasses that needs it
-
     pub fn rebuild_blasses(&mut self) -> SrResult<()> {
-        // This pushes the updated array to the GPU and rebuilds the TLAS.
-        // NOTE: For better performance later, you can swap `rebuild` for an `update`
-        // command if your TLAS abstraction supports VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
-
-        // for blas in self.blases.iter() {
-        //     blas
-        // }
-
-        let blas_instances = &self
-            .cpu_instances_data
-            .iter()
-            .enumerate()
-            .map(|(index, cpu_instance)| BlasInstance {
-                blas: &self.blases[index],
-                transform: cpu_instance.transform,
-                blas_instance_index: cpu_instance.blas_instance_index,
-            })
-            .collect::<Vec<_>>();
-
-        self.tlas.update(blas_instances, &mut self.instances_buffer)?;
-        Ok(())
+        self.resource_manager.update_tlas()
     }
 
-    /// Call this ONCE per frame before `render_to_image`  //TODO questo rebuild serve per testing della scena in movimento
+    /// Call this ONCE per frame before `render_to_image`
     pub fn rebuild_tlas(&mut self) -> SrResult<()> {
-        // This pushes the updated array to the GPU and rebuilds the TLAS.
-        // NOTE: For better performance later, you can swap `rebuild` for an `update`
-        // command if your TLAS abstraction supports VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR
-
-        let blas_instances = &self
-            .cpu_instances_data
-            .iter()
-            .enumerate()
-            .map(|(index, cpu_instance)| BlasInstance {
-                blas: &self.blases[index],
-                transform: cpu_instance.transform,
-                blas_instance_index: cpu_instance.blas_instance_index,
-            })
-            .collect::<Vec<_>>();
-
-        self.tlas.update(blas_instances, &mut self.instances_buffer)?;
-        Ok(())
+        self.resource_manager.update_tlas()
     }
 }
 
