@@ -26,7 +26,7 @@ impl RaytracingDescriptorSetLayout {
     pub const ENTITY_TRANSFORMS_BINDING: u32 = 12;
     pub const NUMBER_OF_BINDINGS: usize = 13;
 
-    pub const NUMBER_OF_SAMPLERS: u32 = vulkan_abstraction::ShaderDataBuffers::NUMBER_OF_SAMPLERS as u32;
+    pub const NUMBER_OF_SAMPLERS: u32 = vulkan_abstraction::ResourceManager::NUMBER_OF_SAMPLERS as u32;
 
     pub fn new(core: Rc<vulkan_abstraction::Core>) -> SrResult<Self> {
         let device = core.device().inner();
@@ -155,7 +155,7 @@ impl RaytracingDescriptorSets {
         motion_vector_image: &vulkan_abstraction::Image,
         blue_noise_image: &vulkan_abstraction::Image,
         blue_noise_sampler: vk::Sampler,
-        shader_data: &vulkan_abstraction::ShaderDataBuffers,
+        shader_data: &vulkan_abstraction::ResourceManager,
     ) -> SrResult<Self> {
         let device = core.device().inner();
         let descriptor_pool_sizes = [

@@ -199,16 +199,8 @@ impl Scene {
                     None => {
                         let primitive_data = scene_data.primitive_data_map.remove(&primitive_unique_key).unwrap();
 
-                        let mut blas = vulkan_abstraction::BLAS::new(
-                            core.clone(),
-                            primitive_data.vertex_buffer,
-                            primitive_data.index_buffer,
-                            false,
-                        )?;
-
-                        // Extract local-space emissive triangles per-BLAS (only once per unique geometry).
-                        // Stored in local space — the shader applies entity transforms at sample time.
-                        if !primitive.local_emissive_triangles.is_empty() {
+                        // Convert local-space emissive triangles for this primitive
+                        let local_emissive_data: Vec<_> = if !primitive.local_emissive_triangles.is_empty() {
                             let material = &primitive.material;
                             let emission = [
                                 material.emissive_factor[0] * material.emissive_strength,
@@ -216,19 +208,26 @@ impl Scene {
                                 material.emissive_factor[2] * material.emissive_strength,
                                 0.0,
                             ];
-
-                            let start = emissive_triangles.len() as u32;
-                            for local_tri in &primitive.local_emissive_triangles {
-                                emissive_triangles.push(vulkan_abstraction::gltf::EmissiveTriangle {
+                            primitive.local_emissive_triangles.iter().map(|local_tri| {
+                                vulkan_abstraction::gltf::EmissiveTriangle {
                                     v0: [local_tri[0].x, local_tri[0].y, local_tri[0].z, 0.0],
                                     v1: [local_tri[1].x, local_tri[1].y, local_tri[1].z, 0.0],
                                     v2: [local_tri[2].x, local_tri[2].y, local_tri[2].z, 0.0],
                                     emission,
-                                });
-                            }
-                            let end = emissive_triangles.len() as u32;
-                            blas.emissive_triangle_ranges.push(start..end);
-                        }
+                                }
+                            }).collect()
+                        } else {
+                            Vec::new()
+                        };
+
+                        let blas = vulkan_abstraction::BLAS::new(
+                            core.clone(),
+                            primitive_data.vertex_buffer,
+                            primitive_data.index_buffer,
+                            false,
+                            &local_emissive_data,
+                            emissive_triangles,
+                        )?;
 
                         blases.push(blas);
 

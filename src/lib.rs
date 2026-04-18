@@ -17,7 +17,7 @@ use crate::utils::env_var_as_bool;
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
 use crate::vulkan_abstraction::{
-    BlasInstance, BlasMetaData, BlasState, Buffer, DenoiseDescriptorSetLayout, DenoisePass, Dynamic, PostProcessDescriptorSets,
+    BlasInstance, BlasMetaData, Buffer, DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets,
     PostprocessPass, TemporalPass,
 };
 
@@ -69,7 +69,7 @@ pub type CreateSurfaceFn = dyn Fn(&ash::Entry, &ash::Instance) -> SrResult<vk::S
 pub struct Renderer {
     image_dependant_data: HashMap<vk::Image, ImageDependentData>,
 
-    shader_data_buffers: vulkan_abstraction::ShaderDataBuffers,
+    shader_data_buffers: vulkan_abstraction::ResourceManager,
 
     blases: Vec<vulkan_abstraction::BLAS>,
     tlas: vulkan_abstraction::TLAS,
@@ -164,7 +164,7 @@ impl Renderer {
         let tlas = vulkan_abstraction::TLAS::new(Rc::clone(&core), &[], &mut instances_buffer)?;
 
         //must be filled by loading a scene
-        let shader_data_buffers = vulkan_abstraction::ShaderDataBuffers::new_empty(Rc::clone(&core))?;
+        let shader_data_buffers = vulkan_abstraction::ResourceManager::new_empty(Rc::clone(&core))?;
 
         let ray_tracing_descriptor_set_layout = vulkan_abstraction::RaytracingDescriptorSetLayout::new(Rc::clone(&core))?;
         let temporal_accumulation_descriptor_set_layout =
@@ -688,8 +688,7 @@ impl Renderer {
             .collect();
 
         // Now self.blases is free — feed emissive data and create entities
-        self.shader_data_buffers.add_blas_emissive_triangles(&emissive_triangles);
-        self.shader_data_buffers.upload_blas_emissive_triangles()?;
+        self.shader_data_buffers.add_blas_emissive_triangles(&emissive_triangles)?;
 
         for (blas_idx, material, transform) in &entity_creation_data {
             self.shader_data_buffers

@@ -91,7 +91,7 @@ impl From<&vulkan_abstraction::gltf::Material> for Material {
 
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
-struct MeshesInfoBufferContents { //TODO I want to extract this from the entity so that there is a strong correlation
+struct EntityGpuData {
     vertex_buffer: vk::DeviceAddress,
     index_buffer: vk::DeviceAddress,
     material: Material,
@@ -102,7 +102,7 @@ struct MeshesInfoBufferContents { //TODO I want to extract this from the entity 
 
 const ARENA_CAPACITY: usize = 4096;
 
-pub(crate) struct ShaderDataBuffers {
+pub(crate) struct ResourceManager {
     //TODO this struct lacks a lot of update and remove methods also indexing into an hashset is kind of a problem especially for gltf
     //TODO this lacks the *tlas and there needs to be a wider entity approach in the project
 
@@ -110,7 +110,7 @@ pub(crate) struct ShaderDataBuffers {
     matrices_uniform_buffer: vulkan_abstraction::UniformBuffer<MatricesBufferContents>,
 
     // Per-entity mesh info (vertex/index addresses + material), indexed by arena slot
-    meshes_info_storage_buffer: vulkan_abstraction::ArenaIndexedWithRingStagingBuffer<MeshesInfoBufferContents>,
+    meshes_info_storage_buffer: vulkan_abstraction::ArenaIndexedWithRingStagingBuffer<EntityGpuData>,
 
     // Entity management
     entities: HashMap<u64, vulkan_abstraction::Entity>,
@@ -119,10 +119,8 @@ pub(crate) struct ShaderDataBuffers {
     // Entity transforms for shader access (indexed by arena slot, CPU-mapped storage buffer)
     entity_transforms: vulkan_abstraction::StagingBuffer<vk::TransformMatrixKHR>,
 
-    // Emissive lighting — local-space triangles stored per-BLAS
-    //TODO wtf are this two separate and not an arena buffer
-    blas_emissive_triangles_cpu: Vec<vulkan_abstraction::gltf::EmissiveTriangle>,
-    blas_emissive_triangles_gpu: vulkan_abstraction::GpuOnlyBuffer,
+    // Emissive lighting — local-space triangles stored per-BLAS (arena ring buffer)
+    blas_emissive_triangles: vulkan_abstraction::ArenaIndexedWithRingStagingBuffer<vulkan_abstraction::gltf::EmissiveTriangle>,
     // Dense indirection buffer for NEE sampling: (blas_tri_index, entity_arena_slot) pairs
     //TODO should this be an arena as well
     emissive_indirection_gpu: vulkan_abstraction::GpuOnlyBuffer,
@@ -137,7 +135,7 @@ pub(crate) struct ShaderDataBuffers {
     core: Rc<vulkan_abstraction::Core>,
 }
 
-impl ShaderDataBuffers {
+impl ResourceManager {
     pub const NUMBER_OF_SAMPLERS: usize = 1024;
 
     pub fn new_empty(core: Rc<vulkan_abstraction::Core>) -> SrResult<Self> {
@@ -164,8 +162,12 @@ impl ShaderDataBuffers {
 
             entity_transforms,
 
-            blas_emissive_triangles_cpu: Vec::new(),
-            blas_emissive_triangles_gpu: vulkan_abstraction::Buffer::new_null(Rc::clone(&core)),
+            blas_emissive_triangles: vulkan_abstraction::ArenaIndexedWithRingStagingBuffer::new(
+                core.clone(),
+                ARENA_CAPACITY,
+                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
+                "blas emissive triangles",
+            )?,
             emissive_indirection_gpu: vulkan_abstraction::Buffer::new_null(Rc::clone(&core)),
 
             textures: Vec::new(),
@@ -200,6 +202,14 @@ impl ShaderDataBuffers {
 
     // ─── Entity management ───────────────────────────────────────────────────
 
+    fn entity_gpu_data(blas: &vulkan_abstraction::BLAS, material: &vulkan_abstraction::gltf::Material) -> EntityGpuData {
+        EntityGpuData {
+            vertex_buffer: blas.vertex_buffer().get_device_address(),
+            index_buffer: blas.index_buffer().get_device_address(),
+            material: Material::from(material),
+        }
+    }
+
     /// Create an entity with the given BLAS, material, and transform.
     /// Returns the EntityId. The caller is responsible for TLAS updates.
     pub fn create_entity(
@@ -212,13 +222,9 @@ impl ShaderDataBuffers {
         let id = self.next_entity_id;
         self.next_entity_id += 1;
 
-        let mesh_info = MeshesInfoBufferContents {
-            vertex_buffer: blas.vertex_buffer().get_device_address(),
-            index_buffer: blas.index_buffer().get_device_address(),
-            material: Material::from(material),
-        };
+        let gpu_data = Self::entity_gpu_data(blas, material);
 
-        let (arena_slot, copy_region) = self.meshes_info_storage_buffer.allocate_and_update(&mesh_info)?;
+        let (arena_slot, copy_region) = self.meshes_info_storage_buffer.allocate_and_update(&gpu_data)?;
 
         // Write transform to the CPU-mapped transforms buffer
         let transforms = self.entity_transforms.map_mut()?;
@@ -269,38 +275,24 @@ impl ShaderDataBuffers {
 
     // ─── Emissive triangles (per-BLAS, local-space) ──────────────────────────
 
-    /// Append local-space emissive triangles for a BLAS. Returns the start index
-    /// into the global buffer so the BLAS can record its range.
-    pub fn add_blas_emissive_triangles(&mut self, triangles: &[vulkan_abstraction::gltf::EmissiveTriangle]) -> u32 {
-        let start = self.blas_emissive_triangles_cpu.len() as u32;
-        self.blas_emissive_triangles_cpu.extend_from_slice(triangles);
-        start
-    }
-
-    /// Upload the accumulated blas_emissive_triangles_cpu to GPU.
-    pub fn upload_blas_emissive_triangles(&mut self) -> SrResult<()> {
-        if self.blas_emissive_triangles_cpu.is_empty() {
-            let dummy = [vulkan_abstraction::gltf::EmissiveTriangle {
-                v0: [0.0; 4],
-                v1: [0.0; 4],
-                v2: [0.0; 4],
-                emission: [0.0; 4],
-            }];
-            self.blas_emissive_triangles_gpu = vulkan_abstraction::GpuOnlyBuffer::new_from_data(
-                Rc::clone(&self.core),
-                &dummy,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
-                "blas emissive triangles dummy",
-            )?;
-        } else {
-            self.blas_emissive_triangles_gpu = vulkan_abstraction::GpuOnlyBuffer::new_from_data(
-                Rc::clone(&self.core),
-                &self.blas_emissive_triangles_cpu,
-                vk::BufferUsageFlags::STORAGE_BUFFER,
-                "blas emissive triangles",
-            )?;
+    /// Append local-space emissive triangles for a BLAS into the arena ring buffer.
+    /// Allocates slots and flushes the staging copies to GPU.
+    pub fn add_blas_emissive_triangles(&mut self, triangles: &[vulkan_abstraction::gltf::EmissiveTriangle]) -> SrResult<()> {
+        if triangles.is_empty() {
+            return Ok(());
         }
-        Ok(())
+
+        let mut copy_regions = Vec::with_capacity(triangles.len());
+        for tri in triangles {
+            let (_slot, copy_region) = self.blas_emissive_triangles.allocate_and_update(tri)?;
+            copy_regions.push(copy_region);
+        }
+
+        self.flush_single_copy(
+            self.blas_emissive_triangles.inner_staging(),
+            self.blas_emissive_triangles.inner(),
+            &copy_regions,
+        )
     }
 
     /// Rebuild the dense emissive indirection buffer from all live entities and their BLASes' ranges.
@@ -309,7 +301,7 @@ impl ShaderDataBuffers {
 
         for entity in self.entities.values() {
             let blas = &blases[entity.blas_index];
-            for range in &blas.emissive_triangle_ranges {
+            for range in blas.emissive_triangle_ranges() {
                 for tri_idx in range.clone() {
                     entries.push(vulkan_abstraction::gltf::EmissiveIndirectionEntry {
                         blas_tri_index: tri_idx,
@@ -382,28 +374,7 @@ impl ShaderDataBuffers {
     }
 
     fn set_emissive_triangles(&mut self, emissive_triangles: &[vulkan_abstraction::gltf::EmissiveTriangle]) -> SrResult<()> {
-        if emissive_triangles.is_empty() {
-            let dummy = [vulkan_abstraction::gltf::EmissiveTriangle {
-                v0: [0.0; 4],
-                v1: [0.0; 4],
-                v2: [0.0; 4],
-                emission: [0.0; 4],
-            }];
-            self.blas_emissive_triangles_gpu = vulkan_abstraction::GpuOnlyBuffer::new_from_data(
-                Rc::clone(&self.core),
-                &dummy,
-                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
-                "emissive triangles dummy storage buffer",
-            )?;
-        } else {
-            self.blas_emissive_triangles_gpu = vulkan_abstraction::GpuOnlyBuffer::new_from_data(
-                Rc::clone(&self.core),
-                emissive_triangles,
-                vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
-                "emissive triangles storage buffer",
-            )?;
-        }
-        Ok(())
+        self.add_blas_emissive_triangles(emissive_triangles)
     }
 
     pub fn add_meshes_info(
@@ -413,12 +384,8 @@ impl ShaderDataBuffers {
     ) -> SrResult<()> {
         let mut copy_buffers = Vec::with_capacity(materials.len());
         for (blas_instance, material) in std::iter::zip(blas_instances.iter(), materials.iter()) {
-            let mesh_info = MeshesInfoBufferContents {
-                vertex_buffer: blas_instance.blas.vertex_buffer().get_device_address(),
-                index_buffer: blas_instance.blas.index_buffer().get_device_address(),
-                material: Material::from(material),
-            };
-            let (_index, copy_buffer) = self.meshes_info_storage_buffer.allocate_and_update(&mesh_info)?;
+            let gpu_data = Self::entity_gpu_data(blas_instance.blas, material);
+            let (_index, copy_buffer) = self.meshes_info_storage_buffer.allocate_and_update(&gpu_data)?;
             copy_buffers.push(copy_buffer);
         }
         if copy_buffers.is_empty() {
@@ -470,7 +437,7 @@ impl ShaderDataBuffers {
     }
 
     pub fn get_emissive_triangles_storage_buffer(&self) -> vk::Buffer {
-        self.blas_emissive_triangles_gpu.inner()
+        self.blas_emissive_triangles.inner()
     }
 
     pub fn get_emissive_indirection_buffer(&self) -> vk::Buffer {

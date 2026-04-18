@@ -10,7 +10,7 @@ pub mod image;
 pub mod queue;
 pub mod ray_tracing_pipeline;
 pub mod shader_binding_table;
-pub mod shader_data_buffers;
+pub mod resource_manager;
 pub mod synchronization;
 
 pub(crate) use acceleration_structure::*;
@@ -23,7 +23,7 @@ pub use image::*;
 pub use queue::*;
 pub(crate) use ray_tracing_pipeline::*;
 pub(crate) use shader_binding_table::*;
-pub(crate) use shader_data_buffers::*;
+pub(crate) use resource_manager::*;
 pub use synchronization::*;
 
 pub use descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;

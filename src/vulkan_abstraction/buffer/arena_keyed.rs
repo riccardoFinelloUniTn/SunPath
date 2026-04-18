@@ -292,7 +292,7 @@ impl<T: Copy> ArenaKeyedGpuMapped<T> {
 //TODO document better of inner workings and correct use
 pub struct ArenaKeyedUniformMapped<T: Copy> {
     inner: ArenaKeyedCore<T>,
-    mapping_uniform: UniformBuffer<u32>,
+    mapping_staging: StagingBuffer<u32>,
 }
 
 impl<T: Copy> ArenaKeyedUniformMapped<T> {
@@ -304,15 +304,15 @@ impl<T: Copy> ArenaKeyedUniformMapped<T> {
         usage: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
-        let mapping_uniform = UniformBuffer::new(core.clone(), capacity as vk::DeviceSize)?;
+        let mapping_staging = StagingBuffer::new(core.clone(), capacity as vk::DeviceSize,usage, name)?;
 
         let mut arena = Self {
             inner: ArenaKeyedCore::new(core, capacity, usage, name)?,
-            mapping_uniform,
+            mapping_staging,
         };
 
         // Initialize all mapping slots to EMPTY
-        let mapped = arena.mapping_uniform.map_mut()?;
+        let mapped = arena.mapping_staging.map_mut()?;
         mapped.iter_mut().for_each(|v| *v = Self::EMPTY_SLOT);
 
         Ok(arena)
@@ -323,7 +323,7 @@ impl<T: Copy> ArenaKeyedUniformMapped<T> {
     pub fn insert(&mut self, id: u64, data: &T) -> SrResult<(usize, vk::BufferCopy)> { //TODO this lacks synchronization?
         let (slot, data_copy) = self.inner.insert(id, data)?;
 
-        let mapped = self.mapping_uniform.map_mut()?;
+        let mapped = self.mapping_staging.map_mut()?;
         mapped[slot] = id as u32;
 
         Ok((slot, data_copy))
@@ -331,7 +331,7 @@ impl<T: Copy> ArenaKeyedUniformMapped<T> {
 
     pub fn remove(&mut self, id: u64) {
         if let Some(slot) = self.inner.get_slot(id) {
-            if let Ok(mapped) = self.mapping_uniform.map_mut() {
+            if let Ok(mapped) = self.mapping_staging.map_mut() {
                 mapped[slot] = Self::EMPTY_SLOT;
             }
         }
@@ -359,7 +359,7 @@ impl<T: Copy> ArenaKeyedUniformMapped<T> {
     }
 
     pub fn mapping_buffer(&self) -> vk::Buffer {
-        self.mapping_uniform.inner()
+        self.mapping_staging.inner()
     }
 
     pub fn capacity(&self) -> usize {
