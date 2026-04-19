@@ -1,8 +1,10 @@
 use ash::vk;
+use crate::vulkan_abstraction::Material;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EntityId(pub u64);
 
+#[derive(Copy , Clone)]
 pub struct Entity {
     pub id: EntityId,
     /// Index into Renderer's blases vec (shared geometry).
@@ -11,4 +13,13 @@ pub struct Entity {
     pub arena_slot: usize,
     /// Instance transform (3x4 row-major, as Vulkan expects for ray tracing).
     pub transform: vk::TransformMatrixKHR,
+}
+
+
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+pub(crate) struct EntityGpuData {
+    vertex_buffer: vk::DeviceAddress,
+    index_buffer: vk::DeviceAddress,
+    material: Material,
 }

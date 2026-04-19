@@ -3,7 +3,6 @@ pub mod buffer;
 pub mod cmd_pool;
 pub mod compute_pipeline;
 pub mod core;
-pub mod entity;
 pub mod descriptor_sets;
 pub mod gltf;
 pub mod image;
@@ -13,19 +12,21 @@ pub mod shader_binding_table;
 pub mod resource_manager;
 pub mod synchronization;
 
+pub mod resources;
+
 pub(crate) use acceleration_structure::*;
 pub use buffer::*;
 pub use cmd_pool::*;
 pub(crate) use compute_pipeline::*;
 pub use core::*;
-pub use entity::*;
+pub use resources::entity::*;
 pub use image::*;
 pub use queue::*;
 pub(crate) use ray_tracing_pipeline::*;
 pub(crate) use shader_binding_table::*;
 pub(crate) use resource_manager::*;
 pub use synchronization::*;
-
+pub use resources::*;
 pub use descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
 pub use descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSets;
 

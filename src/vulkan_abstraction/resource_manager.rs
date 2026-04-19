@@ -2,140 +2,23 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use ash::vk;
-use nalgebra as na;
 
-use crate::vulkan_abstraction::{BlasInstance, BlasMetaData, Buffer, HostAccessibleBuffer};
+use crate::vulkan_abstraction::{BlasInstance, BlasMetaData, Buffer, EntityGpuData, HostAccessibleBuffer};
 use crate::{CameraMatrices, MAX_TLAS_INSTANCES, error::SrResult, vulkan_abstraction};
 
-// ─── GPU-side structs ────────────────────────────────────────────────────────
-
-#[derive(Clone, Copy)]
-#[repr(C, packed)]
-struct MatricesBufferContents {
-    pub view_inverse: na::Matrix4<f32>,
-    pub proj_inverse: na::Matrix4<f32>,
-    pub view_proj: na::Matrix4<f32>,
-    pub prev_view_proj: na::Matrix4<f32>,
-}
-
-#[derive(Clone, Copy)]
-#[repr(C, packed)]
-struct Material {
-    base_color_value: [f32; 4],
-    base_color_texture_index: u32,
-
-    metallic_factor: f32,
-    roughness_factor: f32,
-    metallic_roughness_texture_index: u32,
-
-    normal_texture_index: u32,
-    occlusion_texture_index: u32,
-
-    _padding: [f32; 2],
-
-    //rgb + strength
-    emissive_factor: [f32; 4],
-    emissive_texture_index: u32,
-
-    pub alpha_mode: u32,
-    pub alpha_cutoff: f32,
-
-    pub transmission_factor: f32,
-    pub ior: f32,
-
-    pub _end_padding: [u32; 3],
-}
-impl Material {
-    const NULL_TEXTURE_INDEX: u32 = u32::MAX;
-}
-
-impl From<&vulkan_abstraction::gltf::Material> for Material {
-    fn from(material: &vulkan_abstraction::gltf::Material) -> Self {
-        let to_texture_index = |i: Option<usize>| -> u32 {
-            match i {
-                Some(i) => i as u32,
-                None => Self::NULL_TEXTURE_INDEX,
-            }
-        };
-
-        Self {
-            base_color_value: material.pbr_metallic_roughness_properties.base_color_factor,
-            base_color_texture_index: to_texture_index(material.pbr_metallic_roughness_properties.base_color_texture_index),
-
-            metallic_factor: material.pbr_metallic_roughness_properties.metallic_factor,
-            roughness_factor: material.pbr_metallic_roughness_properties.roughness_factor,
-            metallic_roughness_texture_index: to_texture_index(
-                material.pbr_metallic_roughness_properties.base_color_texture_index,
-            ),
-
-            normal_texture_index: to_texture_index(material.normal_texture_index),
-            occlusion_texture_index: to_texture_index(material.occlusion_texture_index),
-
-            emissive_factor: [
-                material.emissive_factor[0],
-                material.emissive_factor[1],
-                material.emissive_factor[2],
-                material.emissive_strength,
-            ],
-            emissive_texture_index: to_texture_index(material.emissive_texture_index),
-
-            alpha_mode: 0,
-            alpha_cutoff: 0.0,
-            transmission_factor: material.transmission_factor,
-            ior: material.ior,
-            _end_padding: [0; 3],
-            _padding: [0.0; 2],
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-#[repr(C, packed)]
-struct EntityGpuData {
-    vertex_buffer: vk::DeviceAddress,
-    index_buffer: vk::DeviceAddress,
-    material: Material,
-}
-
-
-/// Represents a single light candidate reservoir for Spatiotemporal Reservoir Resampling (ReSTIR).
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Reservoir {
-    /// The index of the winning light candidate in the emissive triangles array.
-    pub light_idx: u32,
-    pub _pad0: [u32; 3],        // std430 vec3 alignment forces offset to 16
-
-    /// The exact 3D world position on the light source that was sampled.
-    pub light_pos: [f32; 3],
-    pub _pad1: f32,             // std430 vec3 alignment forces offset to 32
-
-    /// The 3D world normal of the light source at the sampled position.
-    pub light_normal: [f32; 3],
-    /// The sum of all candidate weights evaluated so far.
-    pub w_sum: f32,
-    /// The number of light candidates that have been processed to get this winner.
-    pub m: f32,
-    /// The final unbiased probabilistic weight of this reservoir, used to scale the final shadow ray.
-    pub w: f32,
-    pub _pad2: [u32; 2],        // Pad out to exactly 64 bytes total
-}
-
-
-// ─── Resource Manager ────────────────────────────────────────────────────────
 
 const ARENA_CAPACITY: vk::DeviceSize = 4096;
 
 pub(crate) struct ResourceManager {
     // Camera
-    matrices_uniform_buffer: vulkan_abstraction::UniformBuffer<MatricesBufferContents>,
+    matrices_uniform_buffer: vulkan_abstraction::UniformBuffer<vulkan_abstraction::MatricesBufferContents>,
 
     // Per-entity mesh info (vertex/index addresses + material), indexed by arena slot
-    meshes_info_storage_buffer: vulkan_abstraction::ArenaGpuBuffer<EntityGpuData>,
+    meshes_info_storage_buffer: vulkan_abstraction::ArenaGpuBuffer<vulkan_abstraction::EntityGpuData>,
 
     // Entity management
+    entities_2 : vulkan_abstraction::ArenaKeyMappedBuffer<vulkan_abstraction::Entity>,
     entities: HashMap<u64, vulkan_abstraction::Entity>,
-    next_entity_id: u64,
 
     // Entity transforms for shader access (indexed by arena slot, CPU-mapped storage buffer)
     entity_transforms: vulkan_abstraction::StagingBuffer<vk::TransformMatrixKHR>,
@@ -156,10 +39,10 @@ pub(crate) struct ResourceManager {
 
     // Scene-owned images and samplers
     scene_images: Vec<vulkan_abstraction::Image>,
-    scene_samplers: Vec<vulkan_abstraction::Sampler>,
+    samplers: Vec<vulkan_abstraction::Sampler>,
 
     // Owned images with unique IDs (for runtime destruction)
-    owned_images: HashMap<u64, vulkan_abstraction::Image>,
+    images: HashMap<u64, vulkan_abstraction::Image>,
     next_image_id: u64,
 
     // Fallback and default textures/samplers
@@ -243,7 +126,7 @@ impl ResourceManager {
             meshes_info_storage_buffer,
 
             entities: HashMap::new(),
-            next_entity_id: 0,
+
 
             entity_transforms,
 
@@ -263,9 +146,9 @@ impl ResourceManager {
             textures: Vec::new(),
 
             scene_images: Vec::new(),
-            scene_samplers: Vec::new(),
+            samplers: Vec::new(),
 
-            owned_images: HashMap::new(),
+            images: HashMap::new(),
             next_image_id: 0,
 
             fallback_texture_image,
@@ -435,18 +318,18 @@ impl ResourceManager {
     pub fn add_image(&mut self, image: vulkan_abstraction::Image) -> u64 {
         let id = self.next_image_id;
         self.next_image_id += 1;
-        self.owned_images.insert(id, image);
+        self.images.insert(id, image);
         id
     }
 
     /// Remove and destroy an image by its ID. No-op if the ID doesn't exist.
     pub fn remove_image(&mut self, id: u64) {
-        self.owned_images.remove(&id);
+        self.images.remove(&id);
         // Image is dropped here, which triggers Vulkan cleanup via Drop impl
     }
 
     pub fn get_image(&self, id: u64) -> Option<&vulkan_abstraction::Image> {
-        self.owned_images.get(&id)
+        self.images.get(&id)
     }
 
     // ─── Acceleration structures ───────────────────────────────────────────
@@ -570,7 +453,7 @@ impl ResourceManager {
         self.rebuild_emissive_indirection()?;
 
         self.scene_images = images;
-        self.scene_samplers = samplers;
+        self.samplers = samplers;
 
         Ok(())
     }
