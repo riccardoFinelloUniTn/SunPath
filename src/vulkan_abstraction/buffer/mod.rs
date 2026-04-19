@@ -62,18 +62,16 @@ pub trait Buffer {
     fn new_null(core: Rc<vulkan_abstraction::Core>) -> Self
     where
         Self: Sized;
-
-    fn new(
-        core: Rc<vulkan_abstraction::Core>,
-        len: vk::DeviceSize,
-        buffer_usage_flags: vk::BufferUsageFlags,
-        name: &'static str,
-    ) -> SrResult<Self> where Self: Sized;
-
 }
 
-pub trait GpuSideBuffer{
-
+/// Marker + accessor trait for buffers whose data lives in GPU-only memory
+/// and are updated via a staging buffer.
+pub trait GpuSideBuffer: Buffer {
+    /// Returns the staging buffer used for CPU→GPU transfers.
+    /// Types without a persistent staging buffer return `vk::Buffer::null()`.
+    fn inner_staging(&self) -> vk::Buffer {
+        vk::Buffer::null()
+    }
 }
 
 /// Exclusive trait for host-visible buffers (CpuToGpu or GpuToCpu) that can be mapped.
@@ -82,28 +80,15 @@ pub trait HostAccessibleBuffer<T>: Buffer {
 
     fn map(&self) -> SrResult<&[T]>;
 
-    fn get(&self) -> SrResult<&T>;
+    fn get(&self) -> SrResult<&T> {
+        self.map().map(|s| &s[0])
+    }
 
-    fn get_mut(&mut self) -> SrResult<&mut T>;
+    fn get_mut(&mut self) -> SrResult<&mut T> {
+        self.map_mut().map(|s| &mut s[0])
+    }
 
     fn len(&self) -> usize;
-
-    fn new_from_data(
-        core: Rc<vulkan_abstraction::Core>,
-        data: &[T],
-        buffer_usage_flags: vk::BufferUsageFlags,
-        name: &'static str,
-    ) -> SrResult<Self> where Self: Sized, T: Copy;
-
-     fn new_from_data_with_custom_length(
-        core: Rc<vulkan_abstraction::Core>,
-        data: &[T],
-        len: vk::DeviceSize,
-        buffer_usage_flags: vk::BufferUsageFlags,
-        name: &'static str,
-    ) -> SrResult<Self>
-    where
-        T: Copy, Self: Sized;
 }
 
 
@@ -565,6 +550,8 @@ pub struct GpuOnlyBuffer {
     raw: RawBuffer,
 }
 impl_buffer_trait!(GpuOnlyBuffer);
+
+impl GpuSideBuffer for GpuOnlyBuffer {}
 
 impl GpuOnlyBuffer {
     pub fn new<T>(

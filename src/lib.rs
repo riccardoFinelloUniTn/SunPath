@@ -1579,11 +1579,6 @@ impl Renderer {
 
     /// Updates the local CPU copy of an object's transform
     pub fn set_object_transform(&mut self, instance_id: usize, transform: nalgebra::Matrix4<f32>) {
-        if instance_id >= self.resource_manager.cpu_instances_data().len() {
-            log::warn!("Attempted to update invalid instance ID: {}", instance_id);
-            return;
-        }
-
         // Vulkan expects a 3x4 row-major matrix for raytracing transforms
         let vk_transform = vk::TransformMatrixKHR {
             matrix: [
@@ -1602,9 +1597,6 @@ impl Renderer {
             ],
         };
 
-        self.resource_manager.cpu_instances_data_mut()[instance_id].transform = vk_transform;
-
-        // Also update the entity transform in the resource manager (for emissive shader access)
         let entity_id = vulkan_abstraction::EntityId(instance_id as u64);
         let _ = self.resource_manager.set_entity_transform(entity_id, vk_transform);
     }

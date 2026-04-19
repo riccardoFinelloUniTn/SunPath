@@ -10,19 +10,24 @@ use crate::vulkan_abstraction;
 
 use super::{Buffer, GpuOnlyBuffer, HostAccessibleBuffer, StagingBuffer};
 
-pub trait ArenaBuffer<T>: Buffer {
-    ///the capacity of the gpu arena buffer TODO this needs to be the number of elements it can hold so in usize
+/// Base trait for all arena-style slot buffers (both direct-indexed and keyed).
+pub trait ArenaBuffer: Buffer {
+    /// Number of element slots the arena can hold.
     fn capacity(&self) -> vk::DeviceSize;
+    /// Reclaim slots whose deferred-free delay has elapsed.
     fn process_pending_frees(&mut self, current_frame: u64);
-
-    fn contains_key(&self, k: &u64) -> bool;
-    fn insert(&mut self, k: &u64, v: T) -> Option<(T,vk::BufferCopy)>;
-
-    fn remove<Q>(&mut self, k: &u64) ;
-
 }
 
 /// Implements `Buffer` and `ArenaBuffer` for arena types backed by an `ArenaRingCore`.
+///
+/// # Arguments
+/// * `$struct_name` — the struct (with a single generic `T: Copy`)
+/// * `$ring_field` — the field that holds the `ArenaRingCore<T>`
+/// * extra null fields to initialise in `Buffer::new_null` beyond the ring itself
+///
+/// The `core` parameter from `new_null` is available inside the extra-field expressions.
+/// Implements `Buffer`, `ArenaBuffer`, and `GpuSideBuffer` for arena types
+/// backed by an `ArenaRingCore`.
 ///
 /// # Arguments
 /// * `$struct_name` — the struct (with a single generic `T: Copy`)
@@ -47,6 +52,10 @@ macro_rules! impl_arena_ring_buffer {
                     $($extra_field: $extra_expr,)*
                 }
             }
+        }
+
+        impl<T: Copy> super::GpuSideBuffer for $struct_name<T> {
+            fn inner_staging(&self) -> ash::vk::Buffer { self.$ring_field.inner_staging() }
         }
 
         impl<T: Copy> super::ArenaBuffer for $struct_name<T> {
