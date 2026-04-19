@@ -1,5 +1,5 @@
-use ash::vk;
 use crate::vulkan_abstraction::Material;
+use ash::vk;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EntityId(pub u64);

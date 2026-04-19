@@ -114,8 +114,8 @@ impl<T: Copy> ArenaGpuKeyMappedBuffer<T> {
             vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::STORAGE_BUFFER,
             "arena keyed mapping staging",
         )?;
-        let mapping_gpu = mapping_staging
-            .new_cloned_to_gpu_only_buffer(vk::BufferUsageFlags::STORAGE_BUFFER, "arena keyed mapping gpu")?;
+        let mapping_gpu =
+            mapping_staging.new_cloned_to_gpu_only_buffer(vk::BufferUsageFlags::STORAGE_BUFFER, "arena keyed mapping gpu")?;
 
         Ok(Self {
             ring: ArenaRingCore::new(core, capacity, usage, name)?,

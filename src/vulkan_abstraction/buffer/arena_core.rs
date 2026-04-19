@@ -16,6 +16,7 @@ pub trait ArenaBuffer: Buffer {
     fn capacity(&self) -> vk::DeviceSize;
     /// Reclaim slots whose deferred-free delay has elapsed.
     fn process_pending_frees(&mut self, current_frame: u64);
+
 }
 
 /// Implements `Buffer` and `ArenaBuffer` for arena types backed by an `ArenaRingCore`.
@@ -54,15 +55,13 @@ macro_rules! impl_arena_ring_buffer {
             }
         }
 
-        impl<T: Copy> super::GpuSideBuffer for $struct_name<T> {
-            fn inner_staging(&self) -> ash::vk::Buffer { self.$ring_field.inner_staging() }
-        }
 
         impl<T: Copy> super::ArenaBuffer for $struct_name<T> {
             fn capacity(&self) -> ash::vk::DeviceSize { self.$ring_field.capacity() }
             fn process_pending_frees(&mut self, current_frame: u64) {
                 self.$ring_field.process_pending_frees(current_frame);
             }
+
         }
     };
     ($struct_name:ident, $ring_field:ident) => {
@@ -146,11 +145,7 @@ impl<T: Copy> ArenaRingCore<T> {
             name,
         )?;
 
-        staging.clone_section_into_gpu_only_buffer(
-            0,
-            capacity * std::mem::size_of::<T>() as vk::DeviceSize,
-            &mut gpu_only,
-        )?;
+        staging.clone_section_into_gpu_only_buffer(0, capacity * std::mem::size_of::<T>() as vk::DeviceSize, &mut gpu_only)?;
 
         Ok(Self {
             staging,

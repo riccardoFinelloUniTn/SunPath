@@ -1,26 +1,32 @@
 pub mod arena_core;
-pub mod arena_host;
 pub mod arena_gpu;
+pub mod arena_host;
 pub mod arena_keyed;
+pub mod gpu_only_buffer;
 pub mod index_buffer;
+pub mod staging_buffer;
+pub mod uniform_buffer;
 pub mod vertex_buffer;
 
 //why use and not just mod?
 pub use arena_core::*;
-pub use arena_host::*;
 pub use arena_gpu::*;
+pub use arena_host::*;
 pub use arena_keyed::*;
+pub use gpu_only_buffer::*;
 pub use index_buffer::*;
+pub use staging_buffer::*;
 use std::marker::PhantomData;
+pub use uniform_buffer::*;
 pub use vertex_buffer::*;
 
-use crate::vulkan_abstraction::Core;
 use crate::{error::*, vulkan_abstraction};
 use ash::vk;
 use ash::vk::{BufferUsageFlags, BufferUsageFlags2KHR, DeviceAddress, DeviceSize, Handle};
 use log::{error, info};
 use std::rc::Rc;
-//TODO divide into a trait gpuonly and hostmemoery accessible and then do custom new functions with custom flags by leveraging strong typing
+
+//TODO should gpu only buffer have a generic and some methods can be moved inside the buffer trait like new,new with data ecc.. with a default impl
 pub fn get_memory_type_index(
     core: &vulkan_abstraction::Core,
     mem_prop_flags: vk::MemoryPropertyFlags,
@@ -64,16 +70,6 @@ pub trait Buffer {
         Self: Sized;
 }
 
-/// Marker + accessor trait for buffers whose data lives in GPU-only memory
-/// and are updated via a staging buffer.
-pub trait GpuSideBuffer: Buffer {
-    /// Returns the staging buffer used for CPU→GPU transfers.
-    /// Types without a persistent staging buffer return `vk::Buffer::null()`.
-    fn inner_staging(&self) -> vk::Buffer {
-        vk::Buffer::null()
-    }
-}
-
 /// Exclusive trait for host-visible buffers (CpuToGpu or GpuToCpu) that can be mapped.
 pub trait HostAccessibleBuffer<T>: Buffer {
     fn map_mut(&mut self) -> SrResult<&mut [T]>;
@@ -90,7 +86,6 @@ pub trait HostAccessibleBuffer<T>: Buffer {
 
     fn len(&self) -> usize;
 }
-
 
 pub struct RawBuffer {
     core: Rc<vulkan_abstraction::Core>,
@@ -205,6 +200,7 @@ impl Drop for RawBuffer {
         }
     }
 }
+#[macro_export]
 macro_rules! impl_buffer_trait {
     ($type:ident < $first_gen:ident $(, $rest_gens:ident)* >) => {
         impl < $first_gen $(, $rest_gens)* > Buffer for $type < $first_gen $(, $rest_gens)* > {
@@ -293,330 +289,6 @@ macro_rules! impl_buffer_trait {
         }
     };
 }
-
-// --- 1. Staging Buffer (CpuToGpu, Mappable) ---
-
-pub struct StagingBuffer<T> {
-    raw: RawBuffer,
-    _marker: PhantomData<T>,
-}
-
-impl_buffer_trait!(StagingBuffer<T>);
-
-impl<T> StagingBuffer<T> {
-    pub fn new_temp(core: Rc<vulkan_abstraction::Core>, len: vk::DeviceSize) -> SrResult<Self> {
-        //TODO this gets used for new from data and it has no flags
-        let byte_size = (len * std::mem::size_of::<T>() as vk::DeviceSize) as vk::DeviceSize;
-        let raw = RawBuffer::new_aligned(
-            core,
-            byte_size,
-            1,
-            gpu_allocator::MemoryLocation::CpuToGpu,
-            vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
-            "staging buffer",
-        )?;
-        Ok(Self {
-            raw,
-            _marker: PhantomData,
-        })
-    }
-
-    pub fn new(
-        core: Rc<vulkan_abstraction::Core>,
-        len: vk::DeviceSize,
-        buffer_usage_flags: vk::BufferUsageFlags,
-        name: &'static str,
-    ) -> SrResult<Self> {
-        let byte_size = len * std::mem::size_of::<T>() as vk::DeviceSize;
-        let raw = RawBuffer::new_aligned(
-            core,
-            byte_size,
-            1,
-            gpu_allocator::MemoryLocation::CpuToGpu,
-            buffer_usage_flags,
-            name,
-        )?;
-        Ok(Self {
-            raw,
-            _marker: PhantomData,
-        })
-    }
-
-    pub fn new_temp_from_data(core: Rc<vulkan_abstraction::Core>, data: &[T]) -> SrResult<Self>
-    where
-        T: Copy,
-    {
-        if data.len() == 0 {
-            return Ok(Self::new_null(core));
-        }
-
-        let mut staging_buffer = Self::new_temp(core, data.len() as vk::DeviceSize)?;
-
-        let mapped_memory = staging_buffer.map_mut()?;
-        mapped_memory[0..data.len()].copy_from_slice(data);
-
-        Ok(staging_buffer)
-    }
-
-    pub fn new_from_data(
-        core: Rc<vulkan_abstraction::Core>,
-        data: &[T],
-        buffer_usage_flags: vk::BufferUsageFlags,
-        name: &'static str,
-    ) -> SrResult<Self>
-    where
-        T: Copy,
-    {
-        if data.len() == 0 {
-            return Ok(Self::new_null(core));
-        }
-
-        let mut staging_buffer = Self::new(core, data.len() as vk::DeviceSize, buffer_usage_flags, name)?;
-
-        let mapped_memory = staging_buffer.map_mut()?;
-        mapped_memory[0..data.len()].copy_from_slice(data);
-
-        Ok(staging_buffer)
-    }
-
-    pub fn new_from_data_with_custom_length(
-        core: Rc<vulkan_abstraction::Core>,
-        data: &[T],
-        len: vk::DeviceSize,
-        buffer_usage_flags: vk::BufferUsageFlags,
-        name: &'static str,
-    ) -> SrResult<Self>
-    where
-        T: Copy,
-    {
-        if len < (data.len() as vk::DeviceSize) {
-            return Err(SrError::new_custom(format!(
-                "attempted to create an insufficiently sized buffer, src : {} bytes , dst : {len} bytes",
-                data.len()
-            )));
-        }
-
-        let mut staging_buffer = Self::new(core, len, buffer_usage_flags, name)?;
-
-        let mapped_memory = staging_buffer.map_mut()?;
-        mapped_memory[0..data.len()].copy_from_slice(data);
-
-        Ok(staging_buffer)
-    }
-
-    pub fn new_cloned_to_gpu_only_buffer(&self, usage: vk::BufferUsageFlags, name: &'static str) -> SrResult<GpuOnlyBuffer> {
-        let mut dst = GpuOnlyBuffer::new::<T>(self.raw.core.clone(), self.len() as vk::DeviceSize, usage, name)?;
-        self.clone_section_into_gpu_only_buffer(0, self.byte_size(), &mut dst)?;
-        Ok(dst)
-    }
-
-    pub fn clone_section_into_gpu_only_buffer(
-        &self,
-        src_offset: DeviceSize,
-        src_section_length: DeviceSize,
-        dst: &mut GpuOnlyBuffer,
-    ) -> SrResult<()> {
-        if self.is_null() {
-            return Ok(());
-        }
-        if dst.is_null() {
-            return Err(SrError::new_custom(
-                "attempted to clone from a non-null buffer to a null buffer".to_string(),
-            ));
-        }
-
-        if self.byte_size() < src_section_length + src_offset {
-            return Err(SrError::new_custom(format!(
-                "attempted to clone from outside the src buffer, src : {src_section_length} bytes , dst : {} bytes",
-                dst.byte_size()
-            )));
-        }
-        if dst.byte_size() < src_section_length {
-            return Err(SrError::new_custom(format!(
-                "attempted to clone into an insufficiently sized buffer, src : {src_section_length} bytes , dst : {} bytes",
-                dst.byte_size()
-            )));
-        }
-
-        let device = self.raw.core.device().inner();
-        let cmd_buf = vulkan_abstraction::cmd_buffer::new_command_buffer(
-            self.raw.core.transfer_cmd_pool(),
-            self.raw.core.device().inner(),
-        )?;
-
-        let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-        unsafe { device.begin_command_buffer(cmd_buf, &begin_info) }?;
-
-        let regions = [vk::BufferCopy::default()
-            .size(src_section_length)
-            .src_offset(src_offset)
-            .dst_offset(0)];
-
-        unsafe { device.cmd_copy_buffer(cmd_buf, self.inner(), dst.inner(), &regions) };
-
-        // 1. Dynamically infer what is going to read this destination buffer
-        let dst_usage = dst.usage(); // Assuming you track this in GpuOnlyBuffer!
-        let (dst_stage_mask, dst_access_mask) = infer_read_masks_from_usage(dst_usage);
-
-        // 2. Point the barrier at the DESTINATION buffer, not the source!
-        let buffer_barrier = vk::BufferMemoryBarrier2::default()
-            .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-            .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-            .dst_stage_mask(dst_stage_mask)
-            .dst_access_mask(dst_access_mask)
-            .buffer(dst.inner()) // ✅ Fixed!
-            .offset(0) // ✅ Granular: only barrier what we copied
-            .size(src_section_length); // ✅ Granular: only barrier what we copied
-
-        let dependency_info = vk::DependencyInfo::default().buffer_memory_barriers(std::slice::from_ref(&buffer_barrier));
-
-        unsafe { device.cmd_pipeline_barrier2(cmd_buf, &dependency_info) };
-
-        unsafe { device.end_command_buffer(cmd_buf) }?;
-
-        self.raw.core.transfer_queue().submit_sync(cmd_buf)?;
-
-        unsafe { device.free_command_buffers(self.raw.core.transfer_cmd_pool().inner(), &[cmd_buf]) };
-
-        Ok(())
-    }
-
-    pub fn clone_into_gpu_only_buffer(&self, dst: &mut GpuOnlyBuffer) -> SrResult<()> {
-        self.clone_section_into_gpu_only_buffer(0, self.byte_size(), dst)?;
-
-        Ok(())
-    }
-}
-
-impl<T> HostAccessibleBuffer<T> for StagingBuffer<T> {
-    fn map_mut(&mut self) -> SrResult<&mut [T]> {
-        self.raw.map_mut::<T>()
-    }
-
-    fn map(&self) -> SrResult<&[T]> {
-        self.raw.map::<T>()
-    }
-
-    fn len(&self) -> usize {
-        (self.raw.byte_size as usize) / std::mem::size_of::<T>()
-    }
-}
-
-// --- 2. Uniform Buffer (CpuToGpu, Mappable) ---
-
-pub struct UniformBuffer<T> {
-    raw: RawBuffer,
-    _marker: PhantomData<T>,
-}
-impl_buffer_trait!(UniformBuffer<T>);
-
-impl<T> UniformBuffer<T> {
-    pub fn new(core: Rc<vulkan_abstraction::Core>, len: vk::DeviceSize) -> SrResult<Self> {
-        let byte_size = len * std::mem::size_of::<T>() as vk::DeviceSize;
-        let raw = RawBuffer::new_aligned(
-            core,
-            byte_size,
-            1,
-            gpu_allocator::MemoryLocation::CpuToGpu,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            "uniform buffer",
-        )?;
-        Ok(Self {
-            raw,
-            _marker: PhantomData,
-        })
-    }
-}
-
-impl<T> HostAccessibleBuffer<T> for UniformBuffer<T> {
-    fn map_mut(&mut self) -> SrResult<&mut [T]> {
-        self.raw.map_mut::<T>()
-    }
-
-    fn map(&self) -> SrResult<&[T]> {
-        self.raw.map::<T>()
-    }
-
-    fn len(&self) -> usize {
-        (self.raw.byte_size as usize) / std::mem::size_of::<T>()
-    }
-}
-
-// --- 3. Gpu Only Buffer (GpuOnly, Non-Mappable) ---
-
-pub struct GpuOnlyBuffer {
-    //TODO flatten it into a trait,so index and vertex buffer are the impl
-    raw: RawBuffer,
-}
-impl_buffer_trait!(GpuOnlyBuffer);
-
-impl GpuSideBuffer for GpuOnlyBuffer {}
-
-impl GpuOnlyBuffer {
-    pub fn new<T>(
-        core: Rc<vulkan_abstraction::Core>,
-        len: vk::DeviceSize,
-        usage: vk::BufferUsageFlags,
-        name: &'static str,
-    ) -> SrResult<Self> {
-        let byte_size = len * std::mem::size_of::<T>() as vk::DeviceSize;
-        let raw = RawBuffer::new_aligned(
-            core,
-            byte_size,
-            1,
-            gpu_allocator::MemoryLocation::GpuOnly,
-            usage | vk::BufferUsageFlags::TRANSFER_DST,
-            name,
-        )?;
-        log::debug!("New Gpu Buffer with these usage flags {usage:?}");
-        Ok(Self { raw })
-    }
-
-    pub fn new_aligned<T>(
-        core: Rc<vulkan_abstraction::Core>,
-        len: vk::DeviceSize,
-        alignment: u64,
-        usage: vk::BufferUsageFlags,
-        name: &'static str,
-    ) -> SrResult<Self> {
-        let byte_size = len * std::mem::size_of::<T>() as vk::DeviceSize;
-        let raw = RawBuffer::new_aligned(
-            core,
-            byte_size,
-            alignment,
-            gpu_allocator::MemoryLocation::GpuOnly,
-            usage | vk::BufferUsageFlags::TRANSFER_DST,
-            name,
-        )?;
-        Ok(Self { raw })
-    }
-
-    pub fn len<T>(&self) -> usize {
-        (self.raw.byte_size as usize) / std::mem::size_of::<T>()
-    }
-
-    pub fn new_from_data<T>(
-        core: Rc<vulkan_abstraction::Core>,
-        data: &[T],
-        buffer_usage_flags: vk::BufferUsageFlags,
-        name: &'static str,
-    ) -> SrResult<Self>
-    where
-        T: Copy,
-    {
-        if data.len() == 0 {
-            return Ok(Self::new_null(core));
-        }
-
-        let staging_buffer = StagingBuffer::new_temp_from_data(Rc::clone(&core), data)?;
-        let gpu_buffer =
-            staging_buffer.new_cloned_to_gpu_only_buffer(buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_DST, name)?;
-
-        Ok(gpu_buffer)
-    }
-}
-
 
 /// Derives the appropriate pipeline stages and access flags for reading a buffer
 /// based on the usage flags it was created with.

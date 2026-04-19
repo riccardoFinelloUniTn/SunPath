@@ -13,9 +13,11 @@ use std::{collections::HashMap, rc::Rc};
 use ash::vk;
 
 use crate::utils::env_var_as_bool;
-use crate::vulkan_abstraction::{DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets, PostprocessPass, Reservoir, TemporalPass};
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
+use crate::vulkan_abstraction::{
+    DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets, PostprocessPass, Reservoir, TemporalPass,
+};
 
 pub const DENOISE_PASSES: u32 = 8;
 
@@ -621,7 +623,6 @@ impl Renderer {
         Ok(())
     }
 
-
     pub fn load_gltf(&mut self, path: &str) -> SrResult<()> {
         let gltf = vulkan_abstraction::gltf::Gltf::new(Rc::clone(&self.core), path)?;
         let (default_scene, scene_data) = gltf.create_default_scene()?;
@@ -788,8 +789,6 @@ impl Renderer {
             // Use result of the last denoise pass
             let final_denoise_idx = (DENOISE_PASSES % 2) as usize;
 
-
-
             (*this_ptr).cmd_postprocess_image(
                 cmd_buf,
                 &*postprocess_descriptor_sets_ptr,
@@ -842,10 +841,7 @@ impl Renderer {
                 &return_to_general_barriers,
             );
 
-
-
             device.end_command_buffer(cmd_buf)?;
-
 
             // Submit using (*this_ptr)
             (*this_ptr).core.graphics_queue().submit_async(
@@ -856,7 +852,6 @@ impl Renderer {
                 img_dependent_data.raytracing_cmd_buf.fence_mut().submit()?,
             )?;
         }
-
 
         // Blitting
         let (wait_sems, wait_dst_stages) = (
@@ -909,13 +904,11 @@ impl Renderer {
         image: vk::Image,
         extent: vk::Extent3D,
     ) -> SrResult<()> {
-
         let device = self.core.device().inner();
 
         //ping pong to avoid errors when using accumulation images
         let history_idx = (self.relative_frame_count % 2) as usize;
         let accum_idx = ((self.relative_frame_count + 1) % 2) as usize;
-
 
         //TODO finni removed this in his branch
 
@@ -944,7 +937,6 @@ impl Renderer {
         self.relative_frame_count += 1;
         *self.core.absolute_frame_count.borrow_mut() += 1;
         unsafe {
-
             let subresource_range = vk::ImageSubresourceRange::default()
                 .aspect_mask(vk::ImageAspectFlags::COLOR)
                 .base_mip_level(0)
@@ -969,7 +961,7 @@ impl Renderer {
                 vk::ImageLayout::UNDEFINED,
                 vk::ImageLayout::GENERAL,
                 vk::AccessFlags::empty(),
-                vk::AccessFlags::SHADER_WRITE
+                vk::AccessFlags::SHADER_WRITE,
             );
 
             let (hist_old, hist_src) = if self.relative_frame_count == 1 {
@@ -997,7 +989,7 @@ impl Renderer {
                 accum_old,
                 vk::ImageLayout::GENERAL,
                 accum_src,
-                vk::AccessFlags::SHADER_WRITE
+                vk::AccessFlags::SHADER_WRITE,
             );
 
             device.cmd_pipeline_barrier(
@@ -1360,7 +1352,6 @@ impl Renderer {
         }
 
         Ok(())
-
     }
 
     fn cmd_postprocess_image(

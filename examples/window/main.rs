@@ -40,7 +40,6 @@ struct App {
     window: Option<Window>,
     resources: Option<AppResources>,
 
-
     start_time: Option<std::time::SystemTime>,
     frame_count: u64,
     last_fps_check: Option<Instant>,
@@ -75,8 +74,6 @@ impl Default for App {
         }
     }
 }
-
-
 
 impl App {
     fn build_resources(&mut self, size: (u32, u32)) -> SrResult<()> {

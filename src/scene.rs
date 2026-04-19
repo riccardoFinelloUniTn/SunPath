@@ -208,14 +208,16 @@ impl Scene {
                                 material.emissive_factor[2] * material.emissive_strength,
                                 0.0,
                             ];
-                            primitive.local_emissive_triangles.iter().map(|local_tri| {
-                                vulkan_abstraction::gltf::EmissiveTriangle {
+                            primitive
+                                .local_emissive_triangles
+                                .iter()
+                                .map(|local_tri| vulkan_abstraction::gltf::EmissiveTriangle {
                                     v0: [local_tri[0].x, local_tri[0].y, local_tri[0].z, 0.0],
                                     v1: [local_tri[1].x, local_tri[1].y, local_tri[1].z, 0.0],
                                     v2: [local_tri[2].x, local_tri[2].y, local_tri[2].z, 0.0],
                                     emission,
-                                }
-                            }).collect()
+                                })
+                                .collect()
                         } else {
                             Vec::new()
                         };

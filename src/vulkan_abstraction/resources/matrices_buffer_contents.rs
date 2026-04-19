@@ -8,4 +8,3 @@ pub struct MatricesBufferContents {
     pub view_proj: na::Matrix4<f32>,
     pub prev_view_proj: na::Matrix4<f32>,
 }
-

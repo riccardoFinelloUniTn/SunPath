@@ -3,9 +3,9 @@ use std::{any::TypeId, ops::Deref, rc::Rc};
 use ash::vk;
 
 use crate::vulkan_abstraction::GpuOnlyBuffer;
-use crate::vulkan_abstraction::buffer::Buffer;
 use crate::{error::*, vulkan_abstraction};
 
+//TODO reworked into a gpubuffer method with custom flags basically since the type can be inferred from the generic
 pub struct IndexBuffer {
     buffer: GpuOnlyBuffer,
     len: usize,

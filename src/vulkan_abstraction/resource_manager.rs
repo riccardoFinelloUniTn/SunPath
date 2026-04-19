@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::vulkan_abstraction::{BlasInstance, Buffer, EntityGpuData, GpuSideBuffer, HostAccessibleBuffer, Material, MatricesBufferContents};
+use crate::vulkan_abstraction::{BlasInstance, Buffer, EntityGpuData, HostAccessibleBuffer, Material, MatricesBufferContents};
 use crate::{CameraMatrices, MAX_TLAS_INSTANCES, error::SrResult, vulkan_abstraction};
 use ash::vk;
 use rand::Rng;
@@ -201,11 +201,7 @@ impl ResourceManager {
         let (_slot, copy_region) = self.entities.insert(id, &gpu_data)?;
 
         // Flush entity GPU data to GPU
-        self.flush_single_copy(
-            self.entities.inner_staging(),
-            self.entities.inner(),
-            &[copy_region],
-        )?;
+        self.flush_single_copy(self.entities.inner_staging(), self.entities.inner(), &[copy_region])?;
 
         let entity = vulkan_abstraction::Entity {
             id: vulkan_abstraction::EntityId(id),
@@ -238,11 +234,7 @@ impl ResourceManager {
             };
             let (_slot, copy_region) = self.entities.insert(id.0, &gpu_data)?;
 
-            self.flush_single_copy(
-                self.entities.inner_staging(),
-                self.entities.inner(),
-                &[copy_region],
-            )?;
+            self.flush_single_copy(self.entities.inner_staging(), self.entities.inner(), &[copy_region])?;
         }
         Ok(())
     }

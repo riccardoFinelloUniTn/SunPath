@@ -70,5 +70,3 @@ impl From<&vulkan_abstraction::gltf::Material> for Material {
         }
     }
 }
-
-
