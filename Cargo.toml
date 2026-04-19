@@ -19,6 +19,7 @@ gpu-allocator = "0.28.0"
 bytemuck = "1.24.0"
 parking_lot = "0.12.5"
 image = "0.25.8"
+rand = "0.9.4"
 #na = "0.32.2"
 
 

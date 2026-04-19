@@ -19,7 +19,7 @@ pub struct Entity {
 #[derive(Clone, Copy)]
 #[repr(C, packed)]
 pub(crate) struct EntityGpuData {
-    vertex_buffer: vk::DeviceAddress,
-    index_buffer: vk::DeviceAddress,
-    material: Material,
+    pub(crate) vertex_buffer: vk::DeviceAddress,
+    pub(crate) index_buffer: vk::DeviceAddress,
+    pub(crate) material: Material,
 }

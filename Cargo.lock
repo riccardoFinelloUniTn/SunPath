@@ -2417,6 +2417,7 @@ dependencies = [
  "log4rs",
  "nalgebra",
  "parking_lot",
+ "rand",
  "shaderc",
  "winit",
 ]

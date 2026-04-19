@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use ash::vk;
-
-use crate::vulkan_abstraction::{BlasInstance, BlasMetaData, Buffer, EntityGpuData, HostAccessibleBuffer};
+use crate::vulkan_abstraction::{
+    BlasInstance, BlasMetaData, Buffer, EntityGpuData, HostAccessibleBuffer, Material, MatricesBufferContents,
+};
 use crate::{CameraMatrices, MAX_TLAS_INSTANCES, error::SrResult, vulkan_abstraction};
-
+use ash::vk;
+use rand::Rng;
 
 const ARENA_CAPACITY: vk::DeviceSize = 4096;
 
@@ -17,7 +18,7 @@ pub(crate) struct ResourceManager {
     meshes_info_storage_buffer: vulkan_abstraction::ArenaGpuBuffer<vulkan_abstraction::EntityGpuData>,
 
     // Entity management
-    entities_2 : vulkan_abstraction::ArenaKeyMappedBuffer<vulkan_abstraction::Entity>,
+    entities_2: vulkan_abstraction::ArenaKeyMappedBuffer<vulkan_abstraction::Entity>,
     entities: HashMap<u64, vulkan_abstraction::Entity>,
 
     // Entity transforms for shader access (indexed by arena slot, CPU-mapped storage buffer)
@@ -85,7 +86,11 @@ impl ResourceManager {
             const RESOLUTION: u32 = 64;
             let image_data = crate::utils::iterate_image_extent(RESOLUTION, RESOLUTION)
                 .map(|(x, y)| {
-                    if (x + y).is_multiple_of(2) { 0xff000000u32 } else { 0xffff00ffu32 }
+                    if (x + y).is_multiple_of(2) {
+                        0xff000000u32
+                    } else {
+                        0xffff00ffu32
+                    }
                 })
                 .map(u32::to_be_bytes)
                 .flatten()
@@ -94,7 +99,11 @@ impl ResourceManager {
             vulkan_abstraction::Image::new_from_data(
                 Rc::clone(&core),
                 image_data,
-                vk::Extent3D { width: RESOLUTION, height: RESOLUTION, depth: 1 },
+                vk::Extent3D {
+                    width: RESOLUTION,
+                    height: RESOLUTION,
+                    depth: 1,
+                },
                 vk::Format::R8G8B8A8_UNORM,
                 vk::ImageTiling::OPTIMAL,
                 gpu_allocator::MemoryLocation::GpuOnly,
@@ -126,7 +135,6 @@ impl ResourceManager {
             meshes_info_storage_buffer,
 
             entities: HashMap::new(),
-
 
             entity_transforms,
 
@@ -411,7 +419,10 @@ impl ResourceManager {
         }
 
         while self.textures.len() < Self::NUMBER_OF_SAMPLERS {
-            self.textures.push((self.fallback_texture_sampler.inner(), self.fallback_texture_image.image_view()));
+            self.textures.push((
+                self.fallback_texture_sampler.inner(),
+                self.fallback_texture_image.image_view(),
+            ));
         }
 
         assert_eq!(self.textures.len(), Self::NUMBER_OF_SAMPLERS);
@@ -522,5 +533,15 @@ impl ResourceManager {
         unsafe { device.free_command_buffers(cmd_pool.inner(), &[cmd_buf]) };
 
         Ok(())
+    }
+}
+
+pub(crate) fn generate<T>(hash_map: &HashMap<u64, T>) -> u64 {
+    loop {
+        let mut rng = rand::rng();
+        let key = rng.random::<u64>();
+        if !hash_map.contains_key(&key) {
+            return key;
+        }
     }
 }
