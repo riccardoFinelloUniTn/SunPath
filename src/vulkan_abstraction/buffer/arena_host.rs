@@ -15,7 +15,7 @@ use super::{ArenaBuffer, Buffer, HostAccessibleBuffer, StagingBuffer};
 /// Slots are allocated from a free-list and freed with deferred deallocation.
 pub struct ArenaHostBuffer<T: Copy> {
     staging: StagingBuffer<T>,
-    capacity: usize,
+    capacity: vk::DeviceSize,
     free_slots: Vec<usize>,
     pending_free_slots: VecDeque<(u64, usize)>,
     len: usize,
@@ -25,17 +25,17 @@ pub struct ArenaHostBuffer<T: Copy> {
 impl<T: Copy> ArenaHostBuffer<T> {
     pub fn new(
         core: Rc<vulkan_abstraction::Core>,
-        capacity: usize,
+        capacity: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
         let staging = StagingBuffer::new(
             core.clone(),
-            capacity as vk::DeviceSize,
+            capacity,
             usage,
             name,
         )?;
-        let free_slots = (0..capacity).rev().collect();
+        let free_slots = (0..capacity as usize).rev().collect();
 
         Ok(Self {
             staging,
@@ -106,12 +106,12 @@ impl<T: Copy> HostAccessibleBuffer<T> for ArenaHostBuffer<T> {
     }
 
     fn len(&self) -> usize {
-        self.capacity
+        self.capacity as usize
     }
 }
 
 impl<T: Copy> ArenaBuffer for ArenaHostBuffer<T> {
-    fn capacity(&self) -> usize {
+    fn capacity(&self) -> vk::DeviceSize {
         self.capacity
     }
 

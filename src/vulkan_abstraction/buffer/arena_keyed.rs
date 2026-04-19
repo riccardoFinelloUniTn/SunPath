@@ -7,7 +7,7 @@ use crate::error::*;
 use crate::vulkan_abstraction;
 use crate::vulkan_abstraction::{Buffer, HostAccessibleBuffer};
 
-use super::{ArenaBuffer, ArenaRingCore, GpuOnlyBuffer, RawBuffer, StagingBuffer};
+use super::{ArenaRingCore, GpuOnlyBuffer, StagingBuffer, impl_arena_ring_buffer};
 
 
 /// Arena buffer with arbitrary u64 keys.
@@ -22,7 +22,7 @@ pub struct ArenaKeyMappedBuffer<T: Copy> {
 impl<T: Copy> ArenaKeyMappedBuffer<T> {
     pub fn new(
         core: Rc<vulkan_abstraction::Core>,
-        capacity: usize,
+        capacity: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
@@ -66,29 +66,7 @@ impl<T: Copy> ArenaKeyMappedBuffer<T> {
     }
 }
 
-impl<T: Copy> Buffer for ArenaKeyMappedBuffer<T> {
-    fn inner(&self) -> vk::Buffer { self.ring.inner_gpu() }
-    fn usage(&self) -> vk::BufferUsageFlags { self.ring.gpu_only().usage() }
-    fn raw(&self) -> &RawBuffer { self.ring.gpu_only().raw() }
-    fn raw_mut(&mut self) -> &mut RawBuffer { self.ring.gpu_only_mut().raw_mut() }
-    fn byte_size(&self) -> vk::DeviceSize { self.ring.gpu_only().byte_size() }
-    fn is_null(&self) -> bool { self.ring.gpu_only().is_null() }
-    fn get_device_address(&self) -> vk::DeviceAddress { self.ring.gpu_only().get_device_address() }
-    fn new_null(core: Rc<vulkan_abstraction::Core>) -> Self {
-        Self {
-            ring: ArenaRingCore::new(core, 0, vk::BufferUsageFlags::empty(), "null")
-                .expect("null arena should not fail"),
-            id_map: HashMap::new(),
-        }
-    }
-}
-
-impl<T: Copy> ArenaBuffer for ArenaKeyMappedBuffer<T> {
-    fn capacity(&self) -> usize { self.ring.capacity() }
-    fn process_pending_frees(&mut self, current_frame: u64) {
-        self.ring.process_pending_frees(current_frame);
-    }
-}
+impl_arena_ring_buffer!(ArenaKeyMappedBuffer, ring, _core => { id_map: HashMap::new() });
 
 
 /// Arena buffer with arbitrary u64 keys. The id→slot mapping is also available
@@ -105,13 +83,13 @@ impl<T: Copy> ArenaGpuKeyMappepBuffer<T> {
 
     pub fn new(
         core: Rc<vulkan_abstraction::Core>,
-        capacity: usize,
+        capacity: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
         let mapping_staging = StagingBuffer::new_from_data(
             core.clone(),
-            &vec![Self::EMPTY_SLOT; capacity],
+            &vec![Self::EMPTY_SLOT; capacity as usize],
             vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::STORAGE_BUFFER,
             "arena keyed mapping staging",
         )?;
@@ -184,31 +162,11 @@ impl<T: Copy> ArenaGpuKeyMappepBuffer<T> {
     }
 }
 
-impl<T: Copy> Buffer for ArenaGpuKeyMappepBuffer<T> {
-    fn inner(&self) -> vk::Buffer { self.ring.inner_gpu() }
-    fn usage(&self) -> vk::BufferUsageFlags { self.ring.gpu_only().usage() }
-    fn raw(&self) -> &RawBuffer { self.ring.gpu_only().raw() }
-    fn raw_mut(&mut self) -> &mut RawBuffer { self.ring.gpu_only_mut().raw_mut() }
-    fn byte_size(&self) -> vk::DeviceSize { self.ring.gpu_only().byte_size() }
-    fn is_null(&self) -> bool { self.ring.gpu_only().is_null() }
-    fn get_device_address(&self) -> vk::DeviceAddress { self.ring.gpu_only().get_device_address() }
-    fn new_null(core: Rc<vulkan_abstraction::Core>) -> Self {
-        Self {
-            ring: ArenaRingCore::new(core.clone(), 0, vk::BufferUsageFlags::empty(), "null")
-                .expect("null arena should not fail"),
-            id_map: HashMap::new(),
-            mapping_gpu: GpuOnlyBuffer::new_null(core.clone()),
-            mapping_staging: StagingBuffer::new_null(core),
-        }
-    }
-}
-
-impl<T: Copy> ArenaBuffer for ArenaGpuKeyMappepBuffer<T> {
-    fn capacity(&self) -> usize { self.ring.capacity() }
-    fn process_pending_frees(&mut self, current_frame: u64) {
-        self.ring.process_pending_frees(current_frame);
-    }
-}
+impl_arena_ring_buffer!(ArenaGpuKeyMappepBuffer, ring, core => {
+    id_map: HashMap::new(),
+    mapping_gpu: GpuOnlyBuffer::new_null(core.clone()),
+    mapping_staging: StagingBuffer::new_null(core.clone()),
+});
 
 
 /// Arena buffer with arbitrary u64 keys. The id→slot mapping is stored in a
@@ -225,11 +183,11 @@ impl<T: Copy> ArenaKeyMappedHostVisibleBuffer<T> {
 
     pub fn new(
         core: Rc<vulkan_abstraction::Core>,
-        capacity: usize,
+        capacity: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
-        let mapping_staging = StagingBuffer::new(core.clone(), capacity as vk::DeviceSize, usage, name)?;
+        let mapping_staging = StagingBuffer::new(core.clone(), capacity, usage, name)?;
 
         let mut arena = Self {
             ring: ArenaRingCore::new(core, capacity, usage, name)?,
@@ -292,27 +250,7 @@ impl<T: Copy> ArenaKeyMappedHostVisibleBuffer<T> {
     }
 }
 
-impl<T: Copy> Buffer for ArenaKeyMappedHostVisibleBuffer<T> {
-    fn inner(&self) -> vk::Buffer { self.ring.inner_gpu() }
-    fn usage(&self) -> vk::BufferUsageFlags { self.ring.gpu_only().usage() }
-    fn raw(&self) -> &RawBuffer { self.ring.gpu_only().raw() }
-    fn raw_mut(&mut self) -> &mut RawBuffer { self.ring.gpu_only_mut().raw_mut() }
-    fn byte_size(&self) -> vk::DeviceSize { self.ring.gpu_only().byte_size() }
-    fn is_null(&self) -> bool { self.ring.gpu_only().is_null() }
-    fn get_device_address(&self) -> vk::DeviceAddress { self.ring.gpu_only().get_device_address() }
-    fn new_null(core: Rc<vulkan_abstraction::Core>) -> Self {
-        Self {
-            ring: ArenaRingCore::new(core.clone(), 0, vk::BufferUsageFlags::empty(), "null")
-                .expect("null arena should not fail"),
-            id_map: HashMap::new(),
-            mapping_staging: StagingBuffer::new_null(core),
-        }
-    }
-}
-
-impl<T: Copy> ArenaBuffer for ArenaKeyMappedHostVisibleBuffer<T> {
-    fn capacity(&self) -> usize { self.ring.capacity() }
-    fn process_pending_frees(&mut self, current_frame: u64) {
-        self.ring.process_pending_frees(current_frame);
-    }
-}
+impl_arena_ring_buffer!(ArenaKeyMappedHostVisibleBuffer, ring, core => {
+    id_map: HashMap::new(),
+    mapping_staging: StagingBuffer::new_null(core.clone()),
+});

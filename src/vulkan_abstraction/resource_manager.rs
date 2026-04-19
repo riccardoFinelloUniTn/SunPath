@@ -100,7 +100,7 @@ struct EntityGpuData {
 
 // ─── Resource Manager ────────────────────────────────────────────────────────
 
-const ARENA_CAPACITY: usize = 4096;
+const ARENA_CAPACITY: vk::DeviceSize = 4096;
 
 pub(crate) struct ResourceManager {
     // Camera
@@ -159,7 +159,7 @@ impl ResourceManager {
         )?;
         let entity_transforms = vulkan_abstraction::StagingBuffer::new(
             core.clone(),
-            ARENA_CAPACITY as vk::DeviceSize,
+            ARENA_CAPACITY,
             vk::BufferUsageFlags::STORAGE_BUFFER,
             "Entity transforms buffer",
         )?;

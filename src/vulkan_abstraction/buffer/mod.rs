@@ -21,7 +21,6 @@ use ash::vk::{BufferUsageFlags, BufferUsageFlags2KHR, DeviceAddress, DeviceSize,
 use log::{error, info};
 use std::rc::Rc;
 //TODO divide into a trait gpuonly and hostmemoery accessible and then do custom new functions with custom flags by leveraging strong typing
-//TODO capacity needs to be DeviceSize
 pub fn get_memory_type_index(
     core: &vulkan_abstraction::Core,
     mem_prop_flags: vk::MemoryPropertyFlags,
