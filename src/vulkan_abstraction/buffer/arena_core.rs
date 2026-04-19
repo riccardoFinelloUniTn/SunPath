@@ -10,10 +10,16 @@ use crate::vulkan_abstraction;
 
 use super::{Buffer, GpuOnlyBuffer, HostAccessibleBuffer, StagingBuffer};
 
-pub trait ArenaBuffer: Buffer {
-    ///the capacity of the gpu arena buffer
+pub trait ArenaBuffer<T>: Buffer {
+    ///the capacity of the gpu arena buffer TODO this needs to be the number of elements it can hold so in usize
     fn capacity(&self) -> vk::DeviceSize;
     fn process_pending_frees(&mut self, current_frame: u64);
+
+    fn contains_key(&self, k: &u64) -> bool;
+    fn insert(&mut self, k: &u64, v: T) -> Option<(T,vk::BufferCopy)>;
+
+    fn remove<Q>(&mut self, k: &u64) ;
+
 }
 
 /// Implements `Buffer` and `ArenaBuffer` for arena types backed by an `ArenaRingCore`.

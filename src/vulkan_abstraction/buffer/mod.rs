@@ -62,6 +62,18 @@ pub trait Buffer {
     fn new_null(core: Rc<vulkan_abstraction::Core>) -> Self
     where
         Self: Sized;
+
+    fn new(
+        core: Rc<vulkan_abstraction::Core>,
+        len: vk::DeviceSize,
+        buffer_usage_flags: vk::BufferUsageFlags,
+        name: &'static str,
+    ) -> SrResult<Self> where Self: Sized;
+
+}
+
+pub trait GpuSideBuffer{
+
 }
 
 /// Exclusive trait for host-visible buffers (CpuToGpu or GpuToCpu) that can be mapped.
@@ -70,8 +82,30 @@ pub trait HostAccessibleBuffer<T>: Buffer {
 
     fn map(&self) -> SrResult<&[T]>;
 
+    fn get(&self) -> SrResult<&T>;
+
+    fn get_mut(&mut self) -> SrResult<&mut T>;
+
     fn len(&self) -> usize;
+
+    fn new_from_data(
+        core: Rc<vulkan_abstraction::Core>,
+        data: &[T],
+        buffer_usage_flags: vk::BufferUsageFlags,
+        name: &'static str,
+    ) -> SrResult<Self> where Self: Sized, T: Copy;
+
+     fn new_from_data_with_custom_length(
+        core: Rc<vulkan_abstraction::Core>,
+        data: &[T],
+        len: vk::DeviceSize,
+        buffer_usage_flags: vk::BufferUsageFlags,
+        name: &'static str,
+    ) -> SrResult<Self>
+    where
+        T: Copy, Self: Sized;
 }
+
 
 pub struct RawBuffer {
     core: Rc<vulkan_abstraction::Core>,

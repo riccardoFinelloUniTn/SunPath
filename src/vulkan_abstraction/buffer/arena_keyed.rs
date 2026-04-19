@@ -19,6 +19,8 @@ pub struct ArenaKeyMappedBuffer<T: Copy> {
     id_map: HashMap<u64, usize>,
 }
 
+
+//TODO this needs to a trait and better naming 
 impl<T: Copy> ArenaKeyMappedBuffer<T> {
     pub fn new(
         core: Rc<vulkan_abstraction::Core>,
@@ -48,6 +50,7 @@ impl<T: Copy> ArenaKeyMappedBuffer<T> {
             self.ring.free_slot(slot);
         }
     }
+   
 
     pub fn get_slot(&self, id: u64) -> Option<usize> {
         self.id_map.get(&id).copied()

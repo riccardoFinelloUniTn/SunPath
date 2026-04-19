@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::vulkan_abstraction::{
-    BlasInstance, BlasMetaData, Buffer, EntityGpuData, HostAccessibleBuffer, Material, MatricesBufferContents,
-};
+use crate::vulkan_abstraction::{BlasInstance, BlasMetaData, Buffer, EntityGpuData, EntityId, HostAccessibleBuffer, Material, MatricesBufferContents};
 use crate::{CameraMatrices, MAX_TLAS_INSTANCES, error::SrResult, vulkan_abstraction};
 use ash::vk;
 use rand::Rng;
@@ -190,7 +188,8 @@ impl ResourceManager {
 
     // ─── Entity management ───────────────────────────────────────────────────
 
-    fn entity_gpu_data(blas: &vulkan_abstraction::BLAS, material: &vulkan_abstraction::gltf::Material) -> EntityGpuData {
+    fn entity_gpu_data(&self ,entity_id : EntityId ) -> EntityGpuData {
+        self.entities_2.
         EntityGpuData {
             vertex_buffer: blas.vertex_buffer().get_device_address(),
             index_buffer: blas.index_buffer().get_device_address(),
@@ -534,14 +533,14 @@ impl ResourceManager {
 
         Ok(())
     }
-}
 
-pub(crate) fn generate<T>(hash_map: &HashMap<u64, T>) -> u64 {
-    loop {
-        let mut rng = rand::rng();
-        let key = rng.random::<u64>();
-        if !hash_map.contains_key(&key) {
-            return key;
+    pub(crate) fn generate<T>(hash_map: &HashMap<u64, T>) -> u64 {
+        loop {
+            let mut rng = rand::rng();
+            let key = rng.random::<u64>();
+            if !hash_map.contains_key(&key) {
+                return key;
+            }
         }
     }
 }
