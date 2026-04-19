@@ -107,7 +107,7 @@ pub(crate) struct ResourceManager {
     matrices_uniform_buffer: vulkan_abstraction::UniformBuffer<MatricesBufferContents>,
 
     // Per-entity mesh info (vertex/index addresses + material), indexed by arena slot
-    meshes_info_storage_buffer: vulkan_abstraction::ArenaIndexedWithRingStagingBuffer<EntityGpuData>,
+    meshes_info_storage_buffer: vulkan_abstraction::ArenaGpuBuffer<EntityGpuData>,
 
     // Entity management
     entities: HashMap<u64, vulkan_abstraction::Entity>,
@@ -123,7 +123,7 @@ pub(crate) struct ResourceManager {
     cpu_instances_data: Vec<BlasMetaData>,
 
     // Emissive lighting — local-space triangles stored per-BLAS (arena ring buffer)
-    blas_emissive_triangles: vulkan_abstraction::ArenaIndexedWithRingStagingBuffer<vulkan_abstraction::gltf::EmissiveTriangle>,
+    blas_emissive_triangles: vulkan_abstraction::ArenaGpuBuffer<vulkan_abstraction::gltf::EmissiveTriangle>,
     // Dense indirection buffer for NEE sampling: (blas_tri_index, entity_arena_slot) pairs
     emissive_indirection_gpu: vulkan_abstraction::GpuOnlyBuffer,
 
@@ -151,7 +151,7 @@ impl ResourceManager {
 
     pub fn new_empty(core: Rc<vulkan_abstraction::Core>) -> SrResult<Self> {
         let matrices_uniform_buffer = vulkan_abstraction::UniformBuffer::new(Rc::clone(&core), 1 as vk::DeviceSize)?;
-        let meshes_info_storage_buffer = vulkan_abstraction::ArenaIndexedWithRingStagingBuffer::new(
+        let meshes_info_storage_buffer = vulkan_abstraction::ArenaGpuBuffer::new(
             core.clone(),
             ARENA_CAPACITY,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
@@ -228,7 +228,7 @@ impl ResourceManager {
             instances_buffer,
             cpu_instances_data: Vec::new(),
 
-            blas_emissive_triangles: vulkan_abstraction::ArenaIndexedWithRingStagingBuffer::new(
+            blas_emissive_triangles: vulkan_abstraction::ArenaGpuBuffer::new(
                 core.clone(),
                 ARENA_CAPACITY,
                 vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,

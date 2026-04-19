@@ -1,16 +1,21 @@
+pub mod arena_core;
+pub mod arena_host;
+pub mod arena_gpu;
 pub mod arena_keyed;
 pub mod index_buffer;
 pub mod vertex_buffer;
 
-use std::collections::VecDeque;
 //why use and not just mod?
+pub use arena_core::*;
+pub use arena_host::*;
+pub use arena_gpu::*;
 pub use arena_keyed::*;
 pub use index_buffer::*;
 use std::marker::PhantomData;
 pub use vertex_buffer::*;
 
 use crate::vulkan_abstraction::Core;
-use crate::{MAX_FRAMES_IN_FLIGHT, error::*, vulkan_abstraction};
+use crate::{error::*, vulkan_abstraction};
 use ash::vk;
 use ash::vk::{BufferUsageFlags, BufferUsageFlags2KHR, DeviceAddress, DeviceSize, Handle};
 use log::{error, info};
@@ -592,211 +597,6 @@ impl GpuOnlyBuffer {
     }
 }
 
-// --- 4. Arena Indexed Buffer ---
-
-/// High-level manager for GPU data that changes at runtime.
-/// Keeps a CPU-side staging buffer to allow granular updates and a GPU-side buffer for shaders.
-pub struct ArenaIndexedWithRingStagingBuffer<T> {
-    staging: StagingBuffer<T>,
-    gpu_only: GpuOnlyBuffer,
-    capacity: usize,
-    free_slots: Vec<usize>, // A simple LIFO stack of available indices
-    ///these are the freed slot of this frame,which will be available the next one
-    pending_free_slots: VecDeque<(u64, usize)>,
-}
-
-impl<T> Buffer for ArenaIndexedWithRingStagingBuffer<T> {
-    ///This returns the gpu one
-    fn inner(&self) -> vk::Buffer {
-        self.gpu_only.inner()
-    }
-    ///This returns the gpu one
-    fn usage(&self) -> vk::BufferUsageFlags {
-        self.raw().usage.clone()
-    }
-
-    fn raw(&self) -> &RawBuffer {
-        self.gpu_only.raw()
-    }
-    ///This returns the gpu one
-    fn raw_mut(&mut self) -> &mut RawBuffer {
-        self.gpu_only.raw_mut()
-    }
-    ///This returns the gpu one
-    fn byte_size(&self) -> DeviceSize {
-        self.gpu_only.byte_size()
-    }
-    ///This returns the gpu one
-    fn is_null(&self) -> bool {
-        self.gpu_only.raw.buffer == vk::Buffer::null()
-    }
-
-    fn get_device_address(&self) -> vk::DeviceAddress {
-        if self.is_null() {
-            return 0;
-        }
-        let info = vk::BufferDeviceAddressInfo::default().buffer(self.gpu_only.raw.buffer);
-        unsafe { self.gpu_only.raw.core.device().inner().get_buffer_device_address(&info) }
-    }
-
-    fn new_null(core: Rc<vulkan_abstraction::Core>) -> Self {
-        Self {
-            staging: StagingBuffer::new_null(core.clone()),
-            gpu_only: GpuOnlyBuffer::new_null(core),
-            capacity: 0,
-            free_slots: vec![],
-            pending_free_slots: Default::default(),
-        }
-    }
-}
-
-impl<T: Copy> ArenaIndexedWithRingStagingBuffer<T> {
-    pub(crate) fn new_into_gpu_from_data(
-        core: Rc<Core>,
-        data: &[T],
-        buffer_usage_flags: BufferUsageFlags,
-        name: &'static str,
-    ) -> SrResult<Self> {
-        let capacity = data.len();
-
-        if capacity == 0 {
-            return Ok(Self::new_null(core));
-        }
-        let byte_length = (data.len() * std::mem::size_of::<T>()) as vk::DeviceSize;
-
-        let staging_buffer = StagingBuffer::new_from_data_with_custom_length(
-            Rc::clone(&core),
-            data,
-            byte_length * MAX_FRAMES_IN_FLIGHT as vk::DeviceSize,
-            buffer_usage_flags,
-            name,
-        )?;
-        log::debug!(
-            "New Gpu Buffer for Arena with these usage flags {:?}",
-            buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST
-        );
-        let mut gpu_buffer = GpuOnlyBuffer::new::<T>(
-            core.clone(),
-            byte_length,
-            buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
-            name,
-        )?;
-
-        staging_buffer.clone_section_into_gpu_only_buffer(0, byte_length, &mut gpu_buffer)?;
-        Ok(Self {
-            staging: staging_buffer,
-            gpu_only: gpu_buffer,
-            capacity,
-            free_slots: vec![],
-            pending_free_slots: Default::default(),
-        })
-    }
-
-    //TODO handle reqeust to grow and compact near indexes in a ranges
-    ///Capacity is the number of elements not the length of the buffer
-    pub fn new(
-        core: Rc<vulkan_abstraction::Core>,
-        capacity: usize,
-        usage: vk::BufferUsageFlags,
-        name: &'static str,
-    ) -> SrResult<Self> {
-        let staging = StagingBuffer::new(
-            core.clone(),
-            (capacity * std::mem::size_of::<T>() * MAX_FRAMES_IN_FLIGHT) as vk::DeviceSize,
-            usage | vk::BufferUsageFlags::TRANSFER_SRC,
-            name,
-        )?; //TODO flags
-        let gpu_only = GpuOnlyBuffer::new::<T>(
-            core.clone(),
-            (capacity * std::mem::size_of::<T>()) as vk::DeviceSize,
-            usage | vk::BufferUsageFlags::TRANSFER_SRC | vk::BufferUsageFlags::TRANSFER_DST,
-            name,
-        )?;
-
-        // Populate the free list with all available indices
-        let free_slots = (0..capacity).rev().collect();
-
-        Ok(Self {
-            staging,
-            gpu_only,
-            capacity,
-            free_slots,
-            pending_free_slots: Default::default(),
-        })
-    }
-
-    /// Frees an index so it can be reused by future allocations.
-    pub fn free_index(&mut self, index: usize) {
-        let current_frame = *self.raw().core.absolute_frame_count.borrow() as u64;
-        self.pending_free_slots.push_back((current_frame, index));
-    }
-
-    pub fn process_pending_frees(&mut self, current_frame: u64) {
-        while let Some(&(frame_freed, index)) = self.pending_free_slots.front() {
-            if current_frame >= frame_freed + MAX_FRAMES_IN_FLIGHT as u64 {
-                self.free_slots.push(index);
-                self.pending_free_slots.pop_front();
-            } else {
-                break;
-            }
-        }
-    }
-
-    pub fn inner_staging(&self) -> vk::Buffer {
-        self.staging.inner()
-    }
-    fn usage_staging(&self) -> vk::BufferUsageFlags {
-        self.raw_staging().usage.clone()
-    }
-    pub fn raw_staging(&self) -> &RawBuffer {
-        self.staging.raw()
-    }
-
-    fn raw_mut_staging(&mut self) -> &mut RawBuffer {
-        self.staging.raw_mut()
-    }
-    fn byte_size_staging(&self) -> DeviceSize {
-        self.staging.byte_size()
-    }
-    fn is_staging_null(&self) -> bool {
-        self.staging.raw.buffer == vk::Buffer::null()
-    }
-
-    fn get_staging_address(&self) -> vk::DeviceAddress {
-        if self.is_null() {
-            return 0;
-        }
-        let info = vk::BufferDeviceAddressInfo::default().buffer(self.staging.raw.buffer);
-        unsafe { self.staging.raw.core.device().inner().get_buffer_device_address(&info) }
-    }
-
-    /// Allocates a slot for new data. Returns the assigned index and the BufferCopy region
-    /// that needs to be submitted to a CommandBuffer for GPU synchronization.
-    pub fn allocate_and_update(&mut self, data: &T) -> SrResult<(usize, vk::BufferCopy)> {
-        let index = self
-            .free_slots
-            .pop()
-            .ok_or_else(|| SrError::new_custom("Arena out of capacity!".to_string()))?;
-
-        let elements_per_frame = self.capacity;
-        let frame_module = *self.raw().core.absolute_frame_count.borrow() % MAX_FRAMES_IN_FLIGHT;
-        let staging_index = index + (elements_per_frame * frame_module);
-
-        let mapped = self.staging.map_mut()?;
-        mapped[staging_index] = *data;
-
-        let size = std::mem::size_of::<T>() as vk::DeviceSize;
-        let dst_offset = (index as vk::DeviceSize) * size;
-        let src_offset = (staging_index as vk::DeviceSize) * size;
-
-        let copy_region = vk::BufferCopy::default()
-            .src_offset(src_offset)
-            .dst_offset(dst_offset)
-            .size(size);
-
-        Ok((index, copy_region))
-    }
-}
 
 /// Derives the appropriate pipeline stages and access flags for reading a buffer
 /// based on the usage flags it was created with.
