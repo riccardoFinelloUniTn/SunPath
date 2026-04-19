@@ -298,18 +298,16 @@ impl Renderer {
         self.clear_image_dependent_data();
 
         let num_pixels = (new_extent.width * new_extent.height) as usize;
-        let reservoir_buffer_a = vulkan_abstraction::Buffer::new::<Reservoir>(
+        let reservoir_buffer_a = vulkan_abstraction::GpuOnlyBuffer::new::<Reservoir>(
             self.core.clone(),
-            num_pixels,
-            gpu_allocator::MemoryLocation::GpuOnly,
+            num_pixels as vk::DeviceSize,
             vk::BufferUsageFlags::STORAGE_BUFFER,
             "ReSTIR Reservoir Buffer A",
         )?;
 
-        let reservoir_buffer_b = vulkan_abstraction::Buffer::new::<Reservoir>(
+        let reservoir_buffer_b = vulkan_abstraction::GpuOnlyBuffer::new::<Reservoir>(
             self.core.clone(),
-            num_pixels,
-            gpu_allocator::MemoryLocation::GpuOnly,
+            num_pixels as vk::DeviceSize,
             vk::BufferUsageFlags::STORAGE_BUFFER,
             "ReSTIR Reservoir Buffer B",
         )?;

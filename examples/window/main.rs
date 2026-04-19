@@ -36,7 +36,6 @@ struct AppResources {
     pub ready_to_present_sems: Vec<vulkan_abstraction::Semaphore>,
 }
 
-#[derive(Default)]
 struct App {
     window: Option<Window>,
     resources: Option<AppResources>,
@@ -128,7 +127,7 @@ impl App {
                         vk::PipelineStageFlags::BOTTOM_OF_PIPE,
                         vk::AccessFlags::TRANSFER_WRITE,
                         vk::AccessFlags::empty(),
-                        vk::ImageLayout::UNDEFINED,
+                        vk::ImageLayout::GENERAL,
                         vk::ImageLayout::PRESENT_SRC_KHR,
                     );
 
@@ -211,7 +210,7 @@ impl App {
                         vk::PipelineStageFlags::BOTTOM_OF_PIPE,
                         vk::AccessFlags::TRANSFER_WRITE,
                         vk::AccessFlags::empty(),
-                        vk::ImageLayout::UNDEFINED,
+                        vk::ImageLayout::GENERAL,
                         vk::ImageLayout::PRESENT_SRC_KHR,
                     );
 

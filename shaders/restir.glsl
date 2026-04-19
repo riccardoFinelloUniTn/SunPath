@@ -15,8 +15,8 @@ struct Reservoir {
     uint _pad2[2];
 };
 
-layout(std430, set = 0, binding = 11) buffer ReservoirBufferA { Reservoir reservoirs_A[]; };
-layout(std430, set = 0, binding = 12) buffer ReservoirBufferB { Reservoir reservoirs_B[]; };
+layout(std430, set = 0, binding = 13) buffer ReservoirBufferA { Reservoir reservoirs_A[]; };
+layout(std430, set = 0, binding = 14) buffer ReservoirBufferB { Reservoir reservoirs_B[]; };
 
 uint get_pixel_index(ivec2 coord, vec2 launch_size) {
     return coord.y * uint(launch_size.x) + coord.x;
