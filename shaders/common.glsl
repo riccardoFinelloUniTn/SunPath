@@ -17,7 +17,7 @@ struct ray_payload_t {
 struct vertex_attributes_t {
     vec3 position;
     vec3 normal;
-    vec3 tangent;
+    vec4 tangent;
     vec2 base_color_tex_coord;
     vec2 metallic_roughness_tex_coord;
     vec2 normal_tex_coord;
@@ -84,18 +84,20 @@ struct entity_transform_t {
 layout(push_constant) uniform push_constant_t {
     uint frame_count;
     bool use_srgb;
-
 };
+
 layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
-layout(set = 0, binding = 1, r11f_g11f_b10f) uniform image2D image;
+// Note: binding 1 (image) is defined in the ray_gen shaders directly to handle different formats
 layout(set = 0, binding = 2) uniform matrices_uniform_buffer_t {
     mat4 view_inverse, proj_inverse, view_proj, prev_view_proj;
 } matrices_uniform_buffer;
+
 layout(set = 0, binding = 3) buffer meshes_info_storage_buffer_t {
     mesh_info_t m[];
 } meshes_info_uniform_buffer;
 
 layout(set = 0, binding = 4) uniform sampler2D texture_samplers[1024];
+
 layout(set = 0, binding = 9) readonly buffer EmissiveTrianglesBuffer {
     emissive_triangle_t emissive_triangles[];
 };

@@ -262,8 +262,8 @@ void main() {
                 float v = r2 * sqr1;
                 float w = 1.0 - u - v;
 
-                vec3 light_pos = wv0 * u + wv1 * v + wv2 * w;
-                vec3 light_normal = normalize(cross(edge1, edge2));
+                vec3 light_pos = light.v0_area.xyz * u + light.v1.xyz * v + light.v2.xyz * w;
+                vec3 light_normal = normalize(cross(light.v1.xyz - light.v0_area.xyz, light.v2.xyz - light.v0_area.xyz));
 
                 // Setup the shadow ray
                 vec3 shadow_ray_dir = light_pos - hitPos;
@@ -274,7 +274,7 @@ void main() {
                 float cos_theta_light = max(dot(light_normal, -shadow_ray_dir), 0.0);
                 float cos_theta_surface = max(dot(hit_normal, shadow_ray_dir), 0.0);
 
-                if (cos_theta_light > 0.0 && cos_theta_surface > 0.0 && light_area > 0.0) {
+                if (cos_theta_light > 0.0 && cos_theta_surface > 0.0) {
                     uint ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT | gl_RayFlagsCullBackFacingTrianglesEXT;
                     prd.dist = 1.0;
 
@@ -282,6 +282,7 @@ void main() {
 
                     // If it is < 0.0, ray_miss.glsl ran, meaning the light is visible
                     if (prd.dist < 0.0) {
+                        float light_area = light.v0_area.w;
                         float solid_angle_pdf = (light_dist * light_dist) / (cos_theta_light * light_area * float(num_lights));
                         radiance += (light.emission.rgb * hit_albedo * throughput * cos_theta_surface) / (solid_angle_pdf * 3.14159);
                     }

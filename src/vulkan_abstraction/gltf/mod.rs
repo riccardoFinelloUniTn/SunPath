@@ -304,16 +304,21 @@ impl Gltf {
 
                 let mut vertices: Vec<vulkan_abstraction::gltf::Vertex> = vec![];
 
-                // get vertices position and normal
-                std::iter::zip(reader.read_positions().unwrap(), reader.read_normals().unwrap()).for_each(
-                    |(position, normal)| {
-                        vertices.push(vulkan_abstraction::gltf::Vertex {
-                            position,
-                            normal,
-                            ..Default::default()
-                        })
-                    },
-                );
+                let positions: Vec<_> = reader.read_positions().unwrap().collect();
+                let normals: Vec<_> = reader.read_normals().unwrap().collect();
+
+                let tangents: Vec<[f32; 4]> = reader
+                    .read_tangents()
+                    .map_or_else(|| vec![[0.0, 0.0, 0.0, 0.0]; positions.len()], |iter| iter.collect());
+
+                for i in 0..positions.len() {
+                    vertices.push(vulkan_abstraction::gltf::Vertex {
+                        position: positions[i],
+                        normal: normals[i],
+                        tangent: tangents[i],
+                        ..Default::default()
+                    });
+                }
 
                 let index_buffer = {
                     let indices = if primitive.indices().is_some() {

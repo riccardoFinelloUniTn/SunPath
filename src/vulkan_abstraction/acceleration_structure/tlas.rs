@@ -143,7 +143,7 @@ impl TLAS {
     fn make_geometry(instances_buffer: &impl Buffer) -> vk::AccelerationStructureGeometryKHR<'_> {
         vk::AccelerationStructureGeometryKHR::default()
             .geometry_type(vk::GeometryTypeKHR::INSTANCES)
-            .flags(vk::GeometryFlagsKHR::OPAQUE)
+            .flags(vk::GeometryFlagsKHR::empty())
             .geometry(vk::AccelerationStructureGeometryDataKHR {
                 instances: vk::AccelerationStructureGeometryInstancesDataKHR::default()
                     .array_of_pointers(false)
