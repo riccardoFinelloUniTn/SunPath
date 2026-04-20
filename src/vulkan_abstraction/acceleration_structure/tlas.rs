@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use ash::vk;
-
+use log::info;
 use crate::vulkan_abstraction::Buffer;
 use crate::{error::*, vulkan_abstraction};
 // Resources:
@@ -86,7 +86,7 @@ impl TLAS {
         Ok(())
     }
 
-    //TODO questo deve essere diviso in oggetti statici e non per ottimizzare al meglio l'allocazione e cosa succede se fallisce
+    //TODO this needs to get from the
     fn insert_in_instances_buffer<'a>(
         core: Rc<vulkan_abstraction::Core>,
         blas_instances: &[vulkan_abstraction::BlasInstance],
@@ -112,6 +112,7 @@ impl TLAS {
                         },
                     },
                 }
+
             })
             .collect();
 

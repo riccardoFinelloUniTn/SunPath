@@ -1,5 +1,4 @@
 pub mod arena_core;
-pub mod arena_gpu;
 pub mod arena_host;
 pub mod arena_keyed;
 pub mod gpu_only_buffer;
@@ -10,7 +9,6 @@ pub mod vertex_buffer;
 
 //why use and not just mod?
 pub use arena_core::*;
-pub use arena_gpu::*;
 pub use arena_host::*;
 pub use arena_keyed::*;
 pub use gpu_only_buffer::*;
@@ -25,7 +23,7 @@ use ash::vk;
 use ash::vk::{BufferUsageFlags, BufferUsageFlags2KHR, DeviceAddress, DeviceSize, Handle};
 use log::{error, info};
 use std::rc::Rc;
-
+//TODO revert capacity as vk::device length some methods signatures
 //TODO should gpu only buffer have a generic and some methods can be moved inside the buffer trait like new,new with data ecc.. with a default impl
 pub fn get_memory_type_index(
     core: &vulkan_abstraction::Core,

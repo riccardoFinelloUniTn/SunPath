@@ -16,7 +16,6 @@ pub trait ArenaBuffer: Buffer {
     fn capacity(&self) -> vk::DeviceSize;
     /// Reclaim slots whose deferred-free delay has elapsed.
     fn process_pending_frees(&mut self, current_frame: u64);
-
 }
 
 /// Implements `Buffer` and `ArenaBuffer` for arena types backed by an `ArenaRingCore`.
@@ -71,6 +70,12 @@ macro_rules! impl_arena_ring_buffer {
 
 pub(crate) use impl_arena_ring_buffer;
 
+
+/// Direct-indexed arena buffer (like a `Vec` with stable slot indices).
+/// Keeps a ring-buffered staging buffer for per-frame writes and a GPU-only
+/// buffer for shader access. Slots are allocated from a free-list and freed
+/// with deferred deallocation.
+/// 
 /// Shared core for arena buffers that use a ring-buffered staging buffer
 /// and a GPU-only destination buffer.
 ///
@@ -94,6 +99,7 @@ impl<T: Copy> ArenaRingCore<T> {
         usage: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
+        
         let staging = StagingBuffer::new(
             core.clone(),
             capacity * MAX_FRAMES_IN_FLIGHT as vk::DeviceSize,

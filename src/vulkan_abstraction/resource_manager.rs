@@ -17,17 +17,16 @@ pub(crate) struct ResourceManager {
     entities: vulkan_abstraction::ArenaKeyMappedBuffer<vulkan_abstraction::EntityGpuData>,
     // CPU-side metadata per entity (blas_index, transform — needed for TLAS rebuild & emissive indirection)
     entity_data: HashMap<u64, vulkan_abstraction::Entity>,
-    next_entity_id: u64,
+
 
     // Acceleration structures
     blases: Vec<vulkan_abstraction::BLAS>,
     tlas: vulkan_abstraction::TLAS,
-    instances_buffer: vulkan_abstraction::StagingBuffer<vk::AccelerationStructureInstanceKHR>,
+    instances_buffer: vulkan_abstraction::StagingBuffer<vk::AccelerationStructureInstanceKHR>, //this needs to be rebuilt every frame out of the entities
 
-    // Emissive lighting — local-space triangles stored per-BLAS (arena ring buffer)
-    blas_emissive_triangles: vulkan_abstraction::ArenaGpuBuffer<vulkan_abstraction::gltf::EmissiveTriangle>,
-    // Dense indirection buffer for NEE sampling: (blas_tri_index, entity_arena_slot) pairs
-    emissive_indirection_gpu: vulkan_abstraction::GpuOnlyBuffer,
+    // Emissive lighting — local-space triangles stored per-BLAS (arena ring buffer) with dense indirection buffer for NEE sampling: (blas_tri_index, entity_arena_slot) pairs
+    blas_emissive_triangles: vulkan_abstraction::ArenaGpuKeyMappedBuffer<vulkan_abstraction::gltf::EmissiveTriangle>,
+
 
     // Textures
     textures: Vec<(vk::Sampler, vk::ImageView)>,
@@ -42,6 +41,8 @@ pub(crate) struct ResourceManager {
     fallback_texture_image: vulkan_abstraction::Image,
     fallback_texture_sampler: vulkan_abstraction::Sampler,
     default_sampler: vulkan_abstraction::Sampler,
+
+    buffer_copies_queued : Vec<(vk::Buffer,vk::Buffer, vk::BufferCopy)>,
 
     core: Rc<vulkan_abstraction::Core>,
 }
@@ -122,19 +123,17 @@ impl ResourceManager {
 
             entities,
             entity_data: HashMap::new(),
-            next_entity_id: 0,
 
             blases: Vec::new(),
             tlas,
             instances_buffer,
 
-            blas_emissive_triangles: vulkan_abstraction::ArenaGpuBuffer::new(
+            blas_emissive_triangles: vulkan_abstraction::ArenaGpuKeyMappedBuffer::new(
                 core.clone(),
                 ARENA_CAPACITY,
                 vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
                 "blas emissive triangles",
             )?,
-            emissive_indirection_gpu: vulkan_abstraction::Buffer::new_null(Rc::clone(&core)),
 
             textures: Vec::new(),
 
@@ -146,6 +145,7 @@ impl ResourceManager {
             fallback_texture_sampler,
             default_sampler,
 
+            buffer_copies_queued: vec![],
             core,
         })
     }
@@ -194,8 +194,7 @@ impl ResourceManager {
         material: &vulkan_abstraction::gltf::Material,
         transform: vk::TransformMatrixKHR,
     ) -> SrResult<vulkan_abstraction::EntityId> {
-        let id = self.next_entity_id;
-        self.next_entity_id += 1;
+        let id = Self::generate(&self.entity_data);
 
         let gpu_data = Self::build_entity_gpu_data(&self.blases[blas_index], material, transform);
         let (_slot, copy_region) = self.entities.insert(id, &gpu_data)?;
@@ -464,7 +463,7 @@ impl ResourceManager {
     }
 
     pub fn get_emissive_indirection_buffer(&self) -> vk::Buffer {
-        self.emissive_indirection_gpu.inner()
+        self.blas_emissive_triangles.mapping_gpu_buffer()
     }
 
     /// Entity transforms are now part of EntityGpuData in the entities buffer.

@@ -44,12 +44,12 @@ pub struct BLAS {
     /// One range per primitive that has emissive triangles.
     emissive_triangle_ranges: Vec<Range<u32>>,
 }
-//TODO for nopw it can only have one geometry per blas
+
 impl BLAS {
     /// the vertex_buffer is assumed to have a vec3 position attribute as its first (not necessarily the only) attribute in memory.
     /// `emissive_triangles` is the global accumulation buffer — this BLAS appends its local emissive
     /// triangles (from `local_emissive_data`) and records the resulting range.
-    pub fn new(
+    pub fn new( //TODO this needs to accept a buffer for the emissive triangles
         core: Rc<vulkan_abstraction::Core>,
         vertex_buffer: vulkan_abstraction::VertexBuffer,
         index_buffer: vulkan_abstraction::IndexBuffer,
