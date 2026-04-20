@@ -126,12 +126,12 @@ void main() {
         imageStore(normal_image, pixel_coord, vec4(0.0));
         imageStore(diffuse_image, pixel_coord, vec4(0.0));
         imageStore(motion_vector_image, pixel_coord, vec4(0.0));
-        write_current_reservoir(pixel_coord, Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, uint[2](0,0)));
+        write_current_reservoir(pixel_coord, Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, 0u, 0.0));
         return;
     }
 
     // Phase 2: RIS Initial Audition
-    Reservoir current_r = Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, uint[2](0,0));
+    Reservoir current_r = Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, 0u, 0.0);
     uint num_lights = emissive_triangles.length();
     int RIS_CANDIDATES = 8;
 
@@ -177,8 +177,15 @@ void main() {
                 Reservoir history_r = read_history_reservoir(prev_coord);
                 history_r.M = min(history_r.M, 10.0);
 
-                if (history_r.W > 0.0) {
-                    history_r.light_idx = min(history_r.light_idx, num_lights - 1);
+                // Geometry rejection: normal + depth similarity
+                vec3 hist_normal = unpack_normal(history_r.hit_normal_packed);
+                bool geom_ok = dot(hit_normal, hist_normal) > 0.9
+                            && abs(virtual_distance - history_r.depth) < 0.1 * virtual_distance;
+
+                // Light index validity (light count may have changed)
+                bool idx_ok = history_r.light_idx < num_lights;
+
+                if (history_r.W > 0.0 && geom_ok && idx_ok) {
                     emissive_triangle_t hist_light = emissive_triangles[history_r.light_idx];
                     vec3 f_y_hist = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, hist_light, history_r.light_pos, history_r.light_normal);
                     float p_hat_hist = max(f_y_hist.r, max(f_y_hist.g, f_y_hist.b));
@@ -193,6 +200,10 @@ void main() {
             }
         }
     }
+
+    // Store geometry for next frame's temporal reuse
+    current_r.hit_normal_packed = pack_normal(hit_normal);
+    current_r.depth = virtual_distance;
 
     write_current_reservoir(pixel_coord, current_r);
 }

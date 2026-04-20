@@ -12,7 +12,8 @@ struct Reservoir {
     float w_sum;
     float M;
     float W;
-    uint _pad2[2];
+    uint hit_normal_packed;
+    float depth;
 };
 
 layout(std430, set = 0, binding = 11) buffer ReservoirBufferA { Reservoir reservoirs_A[]; };

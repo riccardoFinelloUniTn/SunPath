@@ -272,5 +272,8 @@ pub(crate) struct Reservoir {
     pub m: f32,
     /// The final unbiased probabilistic weight of this reservoir, used to scale the final shadow ray.
     pub w: f32,
-    pub _pad2: [u32; 2], // Pad out to exactly 64 bytes total
+    /// Octahedral-packed hit surface normal at the shading point (for temporal validation).
+    pub hit_normal_packed: u32,
+    /// Virtual ray distance to the shading point (for temporal validation).
+    pub depth: f32,
 }

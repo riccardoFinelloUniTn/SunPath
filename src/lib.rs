@@ -19,7 +19,7 @@ use crate::vulkan_abstraction::{
     DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets, PostprocessPass, Reservoir, TemporalPass,
 };
 
-pub const DENOISE_PASSES: u32 = 8;
+pub const DENOISE_PASSES: u32 = 4;
 
 pub const EXPOSURE: f32 = 1.0;
 

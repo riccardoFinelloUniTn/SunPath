@@ -52,6 +52,7 @@ void main() {
         vec3 radiance   = vec3(0.0);
         bool in_glass = false;
         bool restir_evaluated = false;
+        bool prev_did_nee = false;
 
         for (int bounce = 0; bounce < BOUNCES; bounce++) {
             uint ray_flags = gl_RayFlagsNoneEXT;
@@ -75,7 +76,11 @@ void main() {
             float transmission = trans_ior.x;
             float ior = max(trans_ior.y, 1.0);
 
-            radiance += prd.emission * throughput;
+            // Skip direct emission when previous bounce did NEE (prevents double-counting)
+            if (!prev_did_nee) {
+                radiance += prd.emission * throughput;
+            }
+            prev_did_nee = false;
             float brightness = max(prd.emission.r, max(prd.emission.g, prd.emission.b));
             if (brightness > 1.0) break;
 
@@ -97,7 +102,7 @@ void main() {
                     rayDir = reflect(rayDir, N);
                 } else {
                     rayDir = refracted;
-                    in_glass != is_inside;
+                    in_glass = !is_inside;
 
                     if (is_inside) {
                         vec3 absorption = 1.0 - hit_albedo;
@@ -119,10 +124,9 @@ void main() {
                     restir_evaluated = true;
 
                     Reservoir center_r = read_current_reservoir(pixel_coord);
-                    Reservoir spatial_r = Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, uint[2](0,0));
+                    Reservoir spatial_r = Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, 0u, 0.0);
 
-                    if (center_r.W > 0.0) {
-                        center_r.light_idx = min(center_r.light_idx, num_lights - 1);
+                    if (center_r.W > 0.0 && center_r.light_idx < num_lights) {
                         emissive_triangle_t center_light = emissive_triangles[center_r.light_idx];
                         vec3 f_y_center = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, center_light, center_r.light_pos, center_r.light_normal);
                         float p_hat_center = max(f_y_center.r, max(f_y_center.g, f_y_center.b));
@@ -147,8 +151,7 @@ void main() {
                         if (abs(current_depth - neighbor_depth) > 0.1 * current_depth) continue;
 
                         Reservoir neighbor_r = read_current_reservoir(neighbor_coord);
-                        if (neighbor_r.W > 0.0) {
-                            neighbor_r.light_idx = min(neighbor_r.light_idx, num_lights - 1);
+                        if (neighbor_r.W > 0.0 && neighbor_r.light_idx < num_lights) {
                             emissive_triangle_t neighbor_light = emissive_triangles[neighbor_r.light_idx];
                             vec3 f_y_neighbor = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, neighbor_light, neighbor_r.light_pos, neighbor_r.light_normal);
                             float p_hat_neighbor = max(f_y_neighbor.r, max(f_y_neighbor.g, f_y_neighbor.b));
@@ -174,6 +177,7 @@ void main() {
                             if (prd.dist < 0.0) {
                                 radiance += f_y_winner * throughput * spatial_r.W;
                             }
+                            prev_did_nee = true;
                         }
                     }
                 }
@@ -209,6 +213,7 @@ void main() {
                             float solid_angle_pdf = (light_dist * light_dist) / (cos_theta_light * light_area * float(num_lights));
                             radiance += (light.emission.rgb * hit_albedo * throughput * cos_theta_surface) / (solid_angle_pdf * 3.14159);
                         }
+                        prev_did_nee = true;
                     }
                 }
             }
