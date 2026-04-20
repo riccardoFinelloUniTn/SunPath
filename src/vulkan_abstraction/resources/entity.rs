@@ -11,6 +11,8 @@ pub struct Entity {
     pub id: EntityId,
     /// Index into Renderer's blases vec (shared geometry).
     pub blas_index: usize,
+    /// Index into Renderer's instances buffer.
+    pub blas_instance_index: usize,
 
     /// GPU-ready material (kept CPU-side to reconstruct EntityGpuData on updates).
     pub material: Material,

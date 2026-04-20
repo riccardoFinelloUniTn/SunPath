@@ -4,6 +4,7 @@ use crate::{error::SrResult, vulkan_abstraction};
 
 use ash::vk;
 use nalgebra as na;
+use crate::vulkan_abstraction::ResourceManager;
 
 type BlasInstanceInfo = (usize, na::Matrix4<f32>);
 
@@ -35,6 +36,7 @@ impl Scene {
         &self,
         core: &Rc<vulkan_abstraction::Core>,
         blases: &'a mut Vec<vulkan_abstraction::BLAS>,
+        resource_manager: &mut ResourceManager,
         mut scene_data: crate::SceneData,
     ) -> SrResult<(
         Vec<vulkan_abstraction::BlasInstance<'a>>,
@@ -45,8 +47,11 @@ impl Scene {
         Vec<vulkan_abstraction::Image>,
         Vec<vulkan_abstraction::gltf::EmissiveTriangle>,
     )> {
+        
+        
+        
         blases.clear();
-
+    
         let mut blas_instances_info = vec![];
         let mut materials = vec![];
         let mut emissive_triangles = vec![];

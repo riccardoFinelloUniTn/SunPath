@@ -8,7 +8,7 @@ use rand::Rng;
 
 const ARENA_CAPACITY: vk::DeviceSize = 4096;
 
-pub(crate) struct ResourceManager {
+pub(crate) struct ResourceManager { //TODO ring buffer for cameras and instances_buffer or uniform or something and this would be needed for cpu stuff too if they were ever uses outside of gpu data build
     // Camera
     matrices_uniform_buffer: vulkan_abstraction::UniformBuffer<vulkan_abstraction::MatricesBufferContents>,
 
@@ -20,11 +20,16 @@ pub(crate) struct ResourceManager {
 
 
     // Acceleration structures
-    blases: Vec<vulkan_abstraction::BLAS>,
+    blases: HashMap<u64 ,vulkan_abstraction::BLAS>,
     tlas: vulkan_abstraction::TLAS,
-    instances_buffer: vulkan_abstraction::StagingBuffer<vk::AccelerationStructureInstanceKHR>, //this needs to be rebuilt every frame out of the entities
 
-    // Emissive lighting — local-space triangles stored per-BLAS (arena ring buffer) with dense indirection buffer for NEE sampling: (blas_tri_index, entity_arena_slot) pairs
+    instances_buffer: vulkan_abstraction::StagingBuffer<vk::AccelerationStructureInstanceKHR>,
+
+    /// instance index to entity this is needed to get O(1) reverse search on blas instance removal
+    instance_to_entity: HashMap<u64, u64 >,
+
+
+    /// Emissive lighting — local-space triangles stored per-BLAS (arena ring buffer) with dense indirection buffer for NEE sampling: (blas_tri_index, entity_arena_slot) pairs
     blas_emissive_triangles: vulkan_abstraction::ArenaGpuKeyMappedBuffer<vulkan_abstraction::gltf::EmissiveTriangle>,
 
 
@@ -42,6 +47,7 @@ pub(crate) struct ResourceManager {
     fallback_texture_sampler: vulkan_abstraction::Sampler,
     default_sampler: vulkan_abstraction::Sampler,
 
+    //this are action to be done at the start or end of frame together with queued free slots for arena buffers
     buffer_copies_queued : Vec<(vk::Buffer,vk::Buffer, vk::BufferCopy)>,
 
     core: Rc<vulkan_abstraction::Core>,
@@ -124,10 +130,11 @@ impl ResourceManager {
             entities,
             entity_data: HashMap::new(),
 
-            blases: Vec::new(),
+            blases:Default::default(),
             tlas,
             instances_buffer,
 
+            instance_to_entity: Default::default(),
             blas_emissive_triangles: vulkan_abstraction::ArenaGpuKeyMappedBuffer::new(
                 core.clone(),
                 ARENA_CAPACITY,
@@ -148,6 +155,10 @@ impl ResourceManager {
             buffer_copies_queued: vec![],
             core,
         })
+    }
+
+    pub fn start_of_frame(&mut self) {
+
     }
 
     // ─── Camera ──────────────────────────────────────────────────────────────
@@ -257,7 +268,7 @@ impl ResourceManager {
 
         let mut copy_regions = Vec::with_capacity(triangles.len());
         for tri in triangles {
-            let (_slot, copy_region) = self.blas_emissive_triangles.allocate_and_update(tri)?;
+            let (_slot, copy_region) = self.blas_emissive_triangles(tri)?;
             copy_regions.push(copy_region);
         }
 
@@ -382,6 +393,8 @@ impl ResourceManager {
         &self.default_sampler
     }
 
+
+
     pub fn set_textures(
         &mut self,
         images: &[vulkan_abstraction::Image],
@@ -468,6 +481,7 @@ impl ResourceManager {
 
     /// Entity transforms are now part of EntityGpuData in the entities buffer.
     pub fn get_entity_transforms_buffer(&self) -> vk::Buffer {
+        //TODO this goes into bindings in a strange way
         self.entities.inner()
     }
 
