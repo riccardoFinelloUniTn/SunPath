@@ -6,9 +6,11 @@ pub mod index_buffer;
 pub mod staging_buffer;
 pub mod uniform_buffer;
 pub mod vertex_buffer;
+pub mod arena_gpu;
 
 //why use and not just mod?
 pub use arena_core::*;
+pub use arena_gpu::*;
 pub use arena_host::*;
 pub use arena_keyed::*;
 pub use gpu_only_buffer::*;

@@ -29,8 +29,10 @@ pub(crate) struct ResourceManager { //TODO ring buffer for cameras and instances
     instance_to_entity: HashMap<u64, u64 >,
 
 
-    /// Emissive lighting — local-space triangles stored per-BLAS (arena ring buffer) with dense indirection buffer for NEE sampling: (blas_tri_index, entity_arena_slot) pairs
-    blas_emissive_triangles: vulkan_abstraction::ArenaGpuKeyMappedBuffer<vulkan_abstraction::gltf::EmissiveTriangle>,
+    // Emissive lighting — local-space triangles stored per-BLAS (arena ring buffer)
+    blas_emissive_triangles: vulkan_abstraction::ArenaGpuBuffer<vulkan_abstraction::gltf::EmissiveTriangle>,
+    // Dense indirection buffer for NEE sampling: (blas_tri_index, entity_arena_slot) pairs
+    emissive_indirection_gpu: vulkan_abstraction::GpuOnlyBuffer,
 
 
     // Textures
@@ -135,13 +137,14 @@ impl ResourceManager {
             instances_buffer,
 
             instance_to_entity: Default::default(),
-            blas_emissive_triangles: vulkan_abstraction::ArenaGpuKeyMappedBuffer::new(
+            blas_emissive_triangles: vulkan_abstraction::ArenaGpuBuffer::new(
                 core.clone(),
                 ARENA_CAPACITY,
                 vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
                 "blas emissive triangles",
             )?,
 
+            emissive_indirection_gpu: vulkan_abstraction::Buffer::new_null(Rc::clone(&core)),
             textures: Vec::new(),
 
             samplers: Vec::new(),
@@ -213,7 +216,7 @@ impl ResourceManager {
     ) -> SrResult<vulkan_abstraction::EntityId> {
         let id = Self::generate(&self.entity_data);
 
-        let gpu_data = Self::build_entity_gpu_data(&self.blases[blas_index], material, transform);
+        let gpu_data = Self::build_entity_gpu_data(&self.blases[&blas_index], material, transform);
         let (_slot, copy_region) = self.entities.insert(id, &gpu_data)?;
 
         // Flush entity GPU data to GPU
@@ -242,7 +245,7 @@ impl ResourceManager {
         if let Some(entity) = self.entity_data.get_mut(&id.0) {
             entity.transform = transform;
 
-            let blas = &self.blases[entity.blas_index];
+            let blas = &self.blases[&entity.blas_index];
             let gpu_data = EntityGpuData {
                 vertex_buffer: blas.vertex_buffer().get_device_address(),
                 index_buffer: blas.index_buffer().get_device_address(),
@@ -275,7 +278,7 @@ impl ResourceManager {
 
         let mut copy_regions = Vec::with_capacity(triangles.len());
         for tri in triangles {
-            let (_slot, copy_region) = self.blas_emissive_triangles(tri)?;
+            let (_slot, copy_region) = self.blas_emissive_triangles.allocate_and_update(tri)?;
             copy_regions.push(copy_region);
         }
 
@@ -291,25 +294,23 @@ impl ResourceManager {
         let mut entries = Vec::new();
 
         for (&entity_id, entity) in &self.entity_data {
-            let blas = &self.blases[entity.blas_index];
+            let blas = &self.blases[&entity.blas_index];
             let arena_slot = self.entities.get_slot(entity_id).unwrap_or(0);
             for range in blas.emissive_triangle_ranges() {
                 for tri_idx in range.clone() {
                     entries.push(vulkan_abstraction::gltf::EmissiveIndirectionEntry {
                         blas_tri_index: tri_idx,
-                        entity_id: arena_slot as u32,
+                        entity_id: arena_slot as u32, //TODO this is putting a u64 into a u32 this is collision at its finest
                     });
                 }
             }
         }
 
         if entries.is_empty() {
-            let dummy = vulkan_abstraction::gltf::EmissiveIndirectionEntry {
+            let dummy = [vulkan_abstraction::gltf::EmissiveIndirectionEntry {
                 blas_tri_index: 0,
                 entity_id: 0,
-            };
-
-            self.blas_emissive_triangles.insert(  0 , dummy)?;
+            }];
             self.emissive_indirection_gpu = vulkan_abstraction::GpuOnlyBuffer::new_from_data(
                 Rc::clone(&self.core),
                 &dummy,
@@ -468,7 +469,7 @@ impl ResourceManager {
     }
 
     pub fn get_emissive_indirection_buffer(&self) -> vk::Buffer {
-        self.blas_emissive_triangles.mapping_gpu_buffer()
+        self.blas_emissive_triangles.inner()
     }
 
     /// Entity transforms are now part of EntityGpuData in the entities buffer.

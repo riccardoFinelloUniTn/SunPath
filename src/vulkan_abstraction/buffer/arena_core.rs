@@ -71,11 +71,8 @@ macro_rules! impl_arena_ring_buffer {
 pub(crate) use impl_arena_ring_buffer;
 
 
-/// Direct-indexed arena buffer (like a `Vec` with stable slot indices).
-/// Keeps a ring-buffered staging buffer for per-frame writes and a GPU-only
-/// buffer for shader access. Slots are allocated from a free-list and freed
-/// with deferred deallocation.
-/// 
+
+
 /// Shared core for arena buffers that use a ring-buffered staging buffer
 /// and a GPU-only destination buffer.
 ///
