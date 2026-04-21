@@ -15,6 +15,9 @@ pub(crate) struct ResourceManager { //TODO ring buffer for cameras and instances
     // Entity system — single source of truth
     // GPU-side: EntityGpuData per slot (vertex/index addresses, material, transform)
     entities: vulkan_abstraction::ArenaKeyMappedBuffer<vulkan_abstraction::EntityGpuData>,
+    // GPU-side: dedicated transform buffer (stride = 48 bytes = VkTransformMatrixKHR), indexed by the same arena slot.
+    // Binding 12 reads this as entity_transform_t[slot] in shaders.
+    transforms: vulkan_abstraction::ArenaKeyMappedBuffer<vk::TransformMatrixKHR>,
     // CPU-side metadata per entity (blas_index, transform — needed for TLAS rebuild & emissive indirection)
     entity_data: HashMap<u64, vulkan_abstraction::Entity>,
 
@@ -66,6 +69,13 @@ impl ResourceManager {
             ARENA_CAPACITY,
             vk::BufferUsageFlags::STORAGE_BUFFER | vk::BufferUsageFlags::TRANSFER_SRC,
             "Entities GPU buffer",
+        )?;
+
+        let transforms = vulkan_abstraction::ArenaKeyMappedBuffer::new(
+            core.clone(),
+            ARENA_CAPACITY,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            "Entity transforms GPU buffer",
         )?;
 
         let mut instances_buffer = vulkan_abstraction::StagingBuffer::new(
@@ -130,6 +140,7 @@ impl ResourceManager {
             matrices_uniform_buffer,
 
             entities,
+            transforms,
             entity_data: HashMap::new(),
 
             blases:Default::default(),
@@ -264,8 +275,10 @@ impl ResourceManager {
 
         let gpu_data = Self::build_entity_gpu_data(&self.blases[&blas_index], material, transform);
         let (slot, copy_region) = self.entities.insert(id, &gpu_data)?;
-
         self.queue_copy(self.entities.inner_staging(), self.entities.inner(), copy_region);
+
+        let (_, xform_copy) = self.transforms.insert(id, &transform)?;
+        self.queue_copy(self.transforms.inner_staging(), self.transforms.inner(), xform_copy);
 
         let entity = vulkan_abstraction::Entity {
             id: vulkan_abstraction::EntityId(id),
@@ -298,8 +311,10 @@ impl ResourceManager {
                 transform,
             };
             let (_slot, copy_region) = self.entities.insert(id.0, &gpu_data)?;
-
             self.queue_copy(self.entities.inner_staging(), self.entities.inner(), copy_region);
+
+            let (_, xform_copy) = self.transforms.insert(id.0, &transform)?;
+            self.queue_copy(self.transforms.inner_staging(), self.transforms.inner(), xform_copy);
         }
         Ok(())
     }
@@ -509,13 +524,11 @@ impl ResourceManager {
     }
 
     pub fn get_emissive_indirection_buffer(&self) -> vk::Buffer {
-        self.blas_emissive_triangles.inner()
+        self.emissive_indirection_gpu.inner()
     }
 
-    /// Entity transforms are now part of EntityGpuData in the entities buffer.
     pub fn get_entity_transforms_buffer(&self) -> vk::Buffer {
-        //TODO this goes into bindings in a strange way
-        self.entities.inner()
+        self.transforms.inner()
     }
 
     pub fn get_textures(&self) -> &[(vk::Sampler, vk::ImageView)] {
