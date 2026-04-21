@@ -80,10 +80,6 @@ void main() {
 
             float sample_luma = get_luminance(sample_color);
 
-            // Edge-stopping weights
-            float w_depth = exp(-abs(center_depth - sample_depth) * DEPTH_SENSITIVITY);
-            float w_normal = exp((dot(center_normal, sample_normal) - 1.0) * NORMAL_SENSITIVITY);
-
             float diffuse_diff = distance(center_diffuse, sample_diffuse);
             float luma_diff = abs(center_luma - sample_luma);
             float luma_sigma = max(center_luma, sample_luma) * 0.4 + 0.01;

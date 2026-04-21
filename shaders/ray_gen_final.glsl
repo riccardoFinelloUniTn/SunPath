@@ -14,10 +14,11 @@ layout(set = 0, binding = 10) uniform sampler2D blue_noise_tex;
 
 layout(location = 0) rayPayloadEXT ray_payload_t prd;
 
+uint g_current_buf_idx;
+
 Reservoir read_current_reservoir(ivec2 coord) {
     uint idx = get_pixel_index(coord, gl_LaunchSizeEXT.xy);
-    if (frame_count % 2 == 0) return reservoirs_A[idx];
-    else return reservoirs_B[idx];
+    return reservoirs[g_current_buf_idx].r[idx];
 }
 
 void main() {
@@ -28,6 +29,8 @@ void main() {
 
     init_rng(gl_LaunchIDEXT.xy, frame_count, gl_LaunchSizeEXT.xy);
     ivec2 pixel_coord = ivec2(gl_LaunchIDEXT.xy);
+
+    g_current_buf_idx = current_reservoir_idx();
 
     ivec2 tex_size = textureSize(blue_noise_tex, 0);
     ivec2 noise_coord_1 = ivec2(gl_LaunchIDEXT.xy) % tex_size;
@@ -124,7 +127,7 @@ void main() {
                     restir_evaluated = true;
 
                     Reservoir center_r = read_current_reservoir(pixel_coord);
-                    Reservoir spatial_r = Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, 0u, 0.0);
+                    Reservoir spatial_r = Reservoir(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0);
 
                     if (center_r.W > 0.0 && center_r.light_idx < num_lights) {
                         emissive_triangle_t center_light = emissive_triangles[center_r.light_idx];
@@ -236,13 +239,19 @@ void main() {
             }
 
             if (rnd() < p_specular) {
-                vec3 H = get_ggx_microfacet(N, roughness, r1, r2);
+                vec3 H = sample_ggx_vndf(N, V_view, roughness, r1, r2);
                 rayDir = reflect(-V_view, H);
 
                 if (dot(N, rayDir) <= 0.0) {
                     rayDir = get_random_bounce(N, r1, r2);
+                    throughput *= hit_albedo * (1.0 - metallic) * (1.0 - F) / (1.0 - p_specular);
+                } else {
+                    // VNDF pdf = G1(V) * D / (4*NdotV); throughput = F * G1(L) / p_specular.
+                    float NdotL_b = max(dot(N, rayDir), 0.001);
+                    float alpha_b = roughness * roughness;
+                    float G1_L = smith_g1_ggx(NdotL_b, alpha_b);
+                    throughput *= (F * G1_L) / p_specular;
                 }
-                throughput *= (F / p_specular);
             } else {
                 rayDir = get_random_bounce(N, r1, r2);
                 throughput *= hit_albedo * (1.0 - metallic) * (1.0 - F) / (1.0 - p_specular);

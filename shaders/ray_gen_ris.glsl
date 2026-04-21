@@ -13,22 +13,26 @@ layout(set = 0, binding = 8, rg16f) uniform image2D motion_vector_image;
 
 layout(location = 0) rayPayloadEXT ray_payload_t prd;
 
-// RIS specific read/write logic
+// Parities are uniform across the dispatch: cache them once.
+uint g_current_buf_idx;
+uint g_history_buf_idx;
+
 Reservoir read_history_reservoir(ivec2 coord) {
     uint idx = get_pixel_index(coord, gl_LaunchSizeEXT.xy);
-    if (frame_count % 2 == 0) return reservoirs_B[idx];
-    else return reservoirs_A[idx];
+    return reservoirs[g_history_buf_idx].r[idx];
 }
 
 void write_current_reservoir(ivec2 coord, Reservoir r) {
     uint idx = get_pixel_index(coord, gl_LaunchSizeEXT.xy);
-    if (frame_count % 2 == 0) reservoirs_A[idx] = r;
-    else reservoirs_B[idx] = r;
+    reservoirs[g_current_buf_idx].r[idx] = r;
 }
 
 void main() {
     init_rng(gl_LaunchIDEXT.xy, frame_count, gl_LaunchSizeEXT.xy);
     ivec2 pixel_coord = ivec2(gl_LaunchIDEXT.xy);
+
+    g_current_buf_idx = current_reservoir_idx();
+    g_history_buf_idx = history_reservoir_idx();
 
     const vec2 pixelCenter = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
     const vec2 inUV = pixelCenter / vec2(gl_LaunchSizeEXT.xy);
@@ -126,12 +130,12 @@ void main() {
         imageStore(normal_image, pixel_coord, vec4(0.0));
         imageStore(diffuse_image, pixel_coord, vec4(0.0));
         imageStore(motion_vector_image, pixel_coord, vec4(0.0));
-        write_current_reservoir(pixel_coord, Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, 0u, 0.0));
+        write_current_reservoir(pixel_coord, Reservoir(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0));
         return;
     }
 
     // Phase 2: RIS Initial Audition
-    Reservoir current_r = Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, 0u, 0.0);
+    Reservoir current_r = Reservoir(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0);
     uint num_lights = emissive_triangles.length();
     int RIS_CANDIDATES = 8;
 
