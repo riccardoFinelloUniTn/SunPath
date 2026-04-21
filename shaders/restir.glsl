@@ -60,6 +60,20 @@ struct ReservoirGI {
 // Same ping-pong scheme as the DI reservoirs; index is uniform across the dispatch.
 layout(std430, set = 0, binding = 13) buffer ReservoirGiBuffer { ReservoirGI r[]; } reservoirs_gi[2];
 
+// Target pdf for the GI reservoir (luminance of the diffuse indirect contribution from the
+// reconnection vertex x2 back to the shading point at (shade_pos, shade_normal)). Used
+// symmetrically at reservoir init, temporal/spatial merge, and final W recomputation so all
+// three see the same p_hat definition.
+float gi_target_pdf(vec3 shade_pos, vec3 shade_normal, vec3 albedo, float metallic, vec3 sample_pos, vec3 sample_radiance) {
+    vec3 w = sample_pos - shade_pos;
+    float d = max(length(w), 0.0001);
+    w /= d;
+    float NdotL = max(dot(shade_normal, w), 0.0);
+    vec3 f_diffuse = albedo * (1.0 - metallic) / 3.14159;
+    vec3 contrib = sample_radiance * f_diffuse * NdotL;
+    return max(contrib.r, max(contrib.g, contrib.b));
+}
+
 // GI reservoir merge. The jacobian term corrects the geometric change when a sample is reused
 // from a neighboring pixel's shading point (see Ouyang 2021, eq. 11). For temporal reuse the
 // shading point is unchanged, so callers pass jacobian = 1.0.

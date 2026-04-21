@@ -21,6 +21,11 @@ Reservoir read_current_reservoir(ivec2 coord) {
     return reservoirs[g_current_buf_idx].r[idx];
 }
 
+ReservoirGI read_current_gi_reservoir(ivec2 coord) {
+    uint idx = get_pixel_index(coord, gl_LaunchSizeEXT.xy);
+    return reservoirs_gi[g_current_buf_idx].r[idx];
+}
+
 void main() {
     vec3 total_radiance = vec3(0.0);
     int SAMPLES = 1;
@@ -183,6 +188,32 @@ void main() {
                             prev_did_nee = true;
                         }
                     }
+
+                    // --- ReSTIR GI: read current-frame indirect sample (Ouyang 2021) ---
+                    // Reconnect x1 -> x2 with a visibility ray, add the cached radiance, then
+                    // terminate the path: GI now carries emission + NEE at x2, so the random-walk
+                    // indirect would double-count. Specular indirect off this rough surface is
+                    // also dropped (acceptable for roughness > 0.2).
+                    ReservoirGI gi_r = read_current_gi_reservoir(pixel_coord);
+                    if (gi_r.W > 0.0) {
+                        vec3 x2_dir = gi_r.sample_pos - hitPos;
+                        float x2_dist = max(length(x2_dir), 0.0001);
+                        x2_dir /= x2_dist;
+
+                        float gi_NdotL = max(dot(hit_normal, x2_dir), 0.0);
+                        if (gi_NdotL > 0.0) {
+                            uint vis_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT;
+                            prd.dist = 1.0;
+                            traceRayEXT(tlas, vis_flags, 0xFF, 0, 0, 0, hitPos, 0.001, x2_dir, x2_dist - 0.001, 0);
+
+                            if (prd.dist < 0.0) {
+                                // Same diffuse target function used when the reservoir was written.
+                                vec3 gi_f_diffuse = hit_albedo * (1.0 - metallic) / 3.14159;
+                                radiance += gi_r.sample_radiance * gi_f_diffuse * gi_NdotL * gi_r.W * throughput;
+                            }
+                        }
+                    }
+                    break; // GI replaces the rest of the random walk at the first rough diffuse hit.
                 }
                 // STANDARD NEE (Rough Indirect Bounces)
                 else if (restir_evaluated && roughness > 0.2) {

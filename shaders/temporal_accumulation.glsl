@@ -15,7 +15,7 @@ layout(set = 0, binding = 1, rg16f)   uniform readonly image2D motion_vector_ima
 layout(set = 0, binding = 2, r11f_g11f_b10f) uniform image2D accumulation_images[2];
 layout(set = 0, binding = 3)          uniform sampler2D history_samplers[2];
 
-const float ACCUMULATION_FACTOR = 0.18;
+const float ACCUMULATION_FACTOR = 1.0;
 
 // Shared tile for 3x3 neighborhood clamp. 256 threads cooperatively load 324 texels (~1.27/thread).
 // Reduces 9 texelFetch/pixel to ~1.27/pixel plus avoids L1 cache contention.

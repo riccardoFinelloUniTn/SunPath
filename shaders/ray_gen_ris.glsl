@@ -27,6 +27,16 @@ void write_current_reservoir(ivec2 coord, Reservoir r) {
     reservoirs[g_current_buf_idx].r[idx] = r;
 }
 
+void write_current_gi_reservoir(ivec2 coord, ReservoirGI r) {
+    uint idx = get_pixel_index(coord, gl_LaunchSizeEXT.xy);
+    reservoirs_gi[g_current_buf_idx].r[idx] = r;
+}
+
+ReservoirGI read_history_gi_reservoir(ivec2 coord) {
+    uint idx = get_pixel_index(coord, gl_LaunchSizeEXT.xy);
+    return reservoirs_gi[g_history_buf_idx].r[idx];
+}
+
 void main() {
     init_rng(gl_LaunchIDEXT.xy, frame_count, gl_LaunchSizeEXT.xy);
     ivec2 pixel_coord = ivec2(gl_LaunchIDEXT.xy);
@@ -52,7 +62,10 @@ void main() {
     float roughness;
     float metallic;
     vec3 V_view;
-    vec2 prev_uv;
+    vec2 prev_uv = vec2(-1.0);
+    bool prev_valid = false; // true iff virtual_world_pos lies in front of the prev-frame camera
+                             // (protects temporal reuse from w<=0 reprojection flipping prev_uv
+                             //  into a random in-bounds pixel).
 
     bool found_diffuse_surface = false;
     float virtual_distance = 0.0;
@@ -109,9 +122,13 @@ void main() {
         else {
             vec3 virtual_world_pos = origin.xyz + direction.xyz * virtual_distance;
             vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(virtual_world_pos, 1.0);
-            vec2 prev_ndc = prev_clip.xy / prev_clip.w;
 
-            prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
+            prev_valid = prev_clip.w > 0.0;
+            if (prev_valid) {
+                vec2 prev_ndc = prev_clip.xy / prev_clip.w;
+                prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
+                prev_valid = all(greaterThanEqual(prev_uv, vec2(0.0))) && all(lessThan(prev_uv, vec2(1.0)));
+            }
             vec2 motion_vector = inUV - prev_uv;
             vec3 denoiser_albedo = mix(hit_albedo, vec3(1.0), metallic);
 
@@ -126,11 +143,26 @@ void main() {
     }
 
     if (!found_diffuse_surface) {
+        // Sky motion vector: project the final ray direction (post mirror/glass bounces) through
+        // prev_view_proj with w=0, which is the standard trick for points at infinity. Writing a
+        // plain vec4(0.0) here made TAA think the sky was static and ghosted the horizon during
+        // camera rotation — very visible at the top of the screen in high-res scenes.
+        vec2 sky_motion = inUV + vec2(1.0); // default: out-of-range, rejected by TAA
+        vec4 sky_prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(rayDir, 0.0);
+        if (sky_prev_clip.w > 0.0) {
+            vec2 sky_prev_ndc = sky_prev_clip.xy / sky_prev_clip.w;
+            vec2 sky_prev_uv  = sky_prev_ndc * 0.5 + 0.5;
+            if (all(greaterThanEqual(sky_prev_uv, vec2(0.0))) && all(lessThan(sky_prev_uv, vec2(1.0)))) {
+                sky_motion = inUV - sky_prev_uv;
+            }
+        }
+
         imageStore(depth_image, pixel_coord, vec4(100000.0, 0.0, 0.0, 0.0));
         imageStore(normal_image, pixel_coord, vec4(0.0));
         imageStore(diffuse_image, pixel_coord, vec4(0.0));
-        imageStore(motion_vector_image, pixel_coord, vec4(0.0));
+        imageStore(motion_vector_image, pixel_coord, vec4(sky_motion, 0.0, 0.0));
         write_current_reservoir(pixel_coord, Reservoir(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0));
+        write_current_gi_reservoir(pixel_coord, ReservoirGI(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0));
         return;
     }
 
@@ -175,7 +207,7 @@ void main() {
         }
 
         // Temporal Reuse
-        if (frame_count > 0) {
+        if (frame_count > 0 && prev_valid) {
             ivec2 prev_coord = ivec2(prev_uv * vec2(gl_LaunchSizeEXT.xy));
             if (prev_coord.x >= 0 && prev_coord.y >= 0 && prev_coord.x < gl_LaunchSizeEXT.x && prev_coord.y < gl_LaunchSizeEXT.y) {
                 Reservoir history_r = read_history_reservoir(prev_coord);
@@ -210,4 +242,116 @@ void main() {
     current_r.depth = virtual_distance;
 
     write_current_reservoir(pixel_coord, current_r);
+
+    // Phase 3: ReSTIR GI — Initial Sample (Ouyang 2021, Sec. 5.1)
+    // One cosine-weighted indirect bounce from the shading point x1 to a surface sample x2.
+    // No temporal/spatial reuse yet; M starts at 1 and W = 1/pdf when p_hat > 0.
+    ReservoirGI current_gi_r = ReservoirGI(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0);
+
+    vec3 gi_dir = get_random_bounce(hit_normal, rnd(), rnd());
+    float gi_NdotL = max(dot(hit_normal, gi_dir), 0.0);
+
+    if (gi_NdotL > 0.0) {
+        // Trace x1 -> x2 (reuses prd; DI work above is already done).
+        vec3 gi_origin = hitPos + hit_normal * 0.001;
+        traceRayEXT(tlas, gl_RayFlagsNoneEXT, 0xFF, 0, 0, 0, gi_origin, 0.001, gi_dir, 10000.0, 0);
+
+        vec3 sample_pos = vec3(0.0);
+        vec3 sample_normal = vec3(0.0);
+        vec3 sample_radiance = vec3(0.0);
+
+        if (prd.dist > 0.0) {
+            sample_pos = gi_origin + gi_dir * prd.dist;
+            sample_normal = unpack_normal(prd.normal_packed);
+            vec3 x2_albedo = unpackUnorm4x8(prd.albedo_packed).rgb;
+
+            // Direct emission visible at x2 along -gi_dir (BSDF-sampled contribution).
+            sample_radiance = prd.emission;
+
+            // 1-sample NEE at x2: pick a random emissive triangle, sample a point on it,
+            // shadow-test and add the diffuse reflection toward x1. This is what turns the
+            // GI reservoir from "only emissive-visibility" into real 1-bounce diffuse indirect
+            // (Ouyang 2021, Sec. 5.1 — NEE at the reconnection vertex).
+            uint nee_num_lights = emissive_triangles.length();
+            if (nee_num_lights > 0) {
+                uint nee_idx = min(uint(rnd() * nee_num_lights), nee_num_lights - 1);
+                emissive_triangle_t nee_light = emissive_triangles[nee_idx];
+
+                float sq = sqrt(rnd());
+                float nu = 1.0 - sq;
+                float nv = rnd() * sq;
+                float nw = 1.0 - nu - nv;
+
+                vec3 nee_pos    = nee_light.v0_area.xyz * nu + nee_light.v1.xyz * nv + nee_light.v2.xyz * nw;
+                vec3 nee_normal = normalize(cross(nee_light.v1.xyz - nee_light.v0_area.xyz, nee_light.v2.xyz - nee_light.v0_area.xyz));
+
+                vec3 to_light = nee_pos - sample_pos;
+                float nee_dist = max(length(to_light), 0.0001);
+                to_light /= nee_dist;
+
+                float nee_cos_surf  = max(dot(sample_normal, to_light), 0.0);
+                float nee_cos_light = max(dot(nee_normal, -to_light), 0.0);
+
+                if (nee_cos_surf > 0.0 && nee_cos_light > 0.0) {
+                    uint nee_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT;
+                    prd.dist = 1.0;
+                    traceRayEXT(tlas, nee_flags, 0xFF, 0, 0, 0, sample_pos + sample_normal * 0.001, 0.001, to_light, nee_dist - 0.001, 0);
+
+                    if (prd.dist < 0.0) {
+                        // Same diffuse-only NEE convention as the existing random-walk NEE:
+                        // f_r = albedo / π, no (1-metallic) factor to match the final-pass formula.
+                        float nee_area   = nee_light.v0_area.w;
+                        float nee_pdf_sa = (nee_dist * nee_dist) / max(nee_cos_light * nee_area * float(nee_num_lights), 0.0001);
+                        sample_radiance += (nee_light.emission.rgb * x2_albedo * nee_cos_surf) / (nee_pdf_sa * 3.14159);
+                    }
+                }
+            }
+        }
+
+        // Target function p_hat = luminance of the indirect contribution (diffuse lobe only at x1,
+        // since specular indirect is handled by the final pass's BRDF-sampled bounce).
+        float p_hat = gi_target_pdf(hitPos, hit_normal, hit_albedo, metallic, sample_pos, sample_radiance);
+        float pdf   = gi_NdotL / 3.14159; // cosine-weighted sample pdf
+
+        current_gi_r.M                    = 1.0;
+        current_gi_r.w_sum                = (pdf > 0.0) ? (p_hat / pdf) : 0.0;
+        current_gi_r.W                    = (p_hat > 0.0) ? (current_gi_r.w_sum / (current_gi_r.M * p_hat)) : 0.0;
+        current_gi_r.sample_pos           = sample_pos;
+        current_gi_r.sample_normal_packed = pack_normal(sample_normal);
+        current_gi_r.sample_radiance      = sample_radiance;
+    }
+
+    // Phase 4: ReSTIR GI — Temporal Reuse (Ouyang 2021, Sec. 5.3).
+    // Reproject with the motion vector, validate normal+depth, cap M, merge with jacobian=1
+    // (shading point is approximately unchanged across the temporal shift).
+    //
+    // GI is more sensitive to stale history than DI (sample_radiance is baked, not re-evaluated),
+    // so the caps are stricter: M <= 6 adapts in ~6 frames, and the depth reject is tightened to
+    // 5% so nearby surfaces at similar depths can't cross-contaminate.
+    if (frame_count > 0 && prev_valid) {
+        ivec2 prev_coord_gi = ivec2(prev_uv * vec2(gl_LaunchSizeEXT.xy));
+        if (prev_coord_gi.x >= 0 && prev_coord_gi.y >= 0 && prev_coord_gi.x < gl_LaunchSizeEXT.x && prev_coord_gi.y < gl_LaunchSizeEXT.y) {
+            ReservoirGI history_gi = read_history_gi_reservoir(prev_coord_gi);
+            history_gi.M = min(history_gi.M, 6.0);
+
+            vec3 gi_hist_normal = unpack_normal(history_gi.hit_normal_packed);
+            bool gi_geom_ok = dot(hit_normal, gi_hist_normal) > 0.9
+                           && abs(virtual_distance - history_gi.depth) < 0.05 * virtual_distance;
+
+            if (history_gi.W > 0.0 && gi_geom_ok) {
+                float p_hat_hist = gi_target_pdf(hitPos, hit_normal, hit_albedo, metallic, history_gi.sample_pos, history_gi.sample_radiance);
+
+                merge_reservoirs_gi(current_gi_r, history_gi, p_hat_hist, 1.0, rnd());
+
+                float p_hat_merged = gi_target_pdf(hitPos, hit_normal, hit_albedo, metallic, current_gi_r.sample_pos, current_gi_r.sample_radiance);
+                current_gi_r.W = (p_hat_merged > 0.0) ? (current_gi_r.w_sum / (current_gi_r.M * p_hat_merged)) : 0.0;
+            }
+        }
+    }
+
+    // Store geometry for next frame's temporal validation (same scheme as DI reservoir).
+    current_gi_r.hit_normal_packed = pack_normal(hit_normal);
+    current_gi_r.depth             = virtual_distance;
+
+    write_current_gi_reservoir(pixel_coord, current_gi_r);
 }

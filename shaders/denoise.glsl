@@ -99,5 +99,5 @@ void main() {
 
     vec3 spatially_denoised_color = (sum_color / max(sum_weight, 0.0001)) * center_diffuse;
 
-    imageStore(spatial_output, pixel_coords, vec4(spatially_denoised_color, 1.0));
+    imageStore(spatial_output, pixel_coords, vec4(center_color, 1.0));
 }
