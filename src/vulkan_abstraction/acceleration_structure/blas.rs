@@ -37,7 +37,7 @@ pub struct BLAS {
     vertex_buffer: vulkan_abstraction::VertexBuffer,
     #[allow(unused)]
     index_buffer: vulkan_abstraction::IndexBuffer,
-   
+
     state: BlasState,
     /// Ranges into the global blas_emissive_triangles buffer (local-space, per-BLAS).
     /// One range per primitive that has emissive triangles.
@@ -48,13 +48,13 @@ impl BLAS {
     /// the vertex_buffer is assumed to have a vec3 position attribute as its first (not necessarily the only) attribute in memory.
     /// `emissive_triangles` is the global accumulation buffer — this BLAS appends its local emissive
     /// triangles (from `local_emissive_data`) and records the resulting range.
-    pub fn new( //TODO this needs to accept a buffer for the emissive triangles and fill itself the holes
+    pub fn new(
+        //TODO this needs to accept a buffer for the emissive triangles and fill itself the holes
         core: Rc<vulkan_abstraction::Core>,
         vertex_buffer: vulkan_abstraction::VertexBuffer,
         index_buffer: vulkan_abstraction::IndexBuffer,
+        emissive_triangle_ranges: Vec<Range<u32>>,
         fast_build: bool,
-        local_emissive_data: &[vulkan_abstraction::gltf::EmissiveTriangle],
-        emissive_triangles: &mut Vec<vulkan_abstraction::gltf::EmissiveTriangle>,
     ) -> SrResult<Self> {
         /*
          * Building the BLAS is mostly a 3 step process (with some complications):
@@ -80,13 +80,6 @@ impl BLAS {
             fast_build,
         )?;
 
-        let mut emissive_triangle_ranges = Vec::new();
-        if !local_emissive_data.is_empty() {
-            let start = emissive_triangles.len() as u32;
-            emissive_triangles.extend_from_slice(local_emissive_data);
-            let end = emissive_triangles.len() as u32;
-            emissive_triangle_ranges.push(start..end);
-        }
 
         Ok(Self {
             blas,

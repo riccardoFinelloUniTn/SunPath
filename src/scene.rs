@@ -156,13 +156,21 @@ impl Scene {
                             Vec::new()
                         };
 
+
+                        let mut emissive_triangle_ranges = Vec::new();
+                        if !local_emissive_data.is_empty() {
+                            let start = emissive_triangles.len() as u32;
+                            emissive_triangles.extend_from_slice(&*local_emissive_data);
+                            let end = emissive_triangles.len() as u32;
+                            emissive_triangle_ranges.push(start..end);
+                        }
+                        
                         let blas = vulkan_abstraction::BLAS::new(
                             core.clone(),
                             primitive_data.vertex_buffer,
                             primitive_data.index_buffer,
+                            emissive_triangle_ranges,
                             false,
-                            &local_emissive_data,
-                            emissive_triangles,
                         )?;
 
                         blases.push(blas);
