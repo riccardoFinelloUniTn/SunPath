@@ -174,8 +174,8 @@ impl ResourceManager {
         let copies = std::mem::take(&mut self.buffer_copies_queued);
 
         let device = self.core.device().inner();
-        let transfer_queue = self.core.transfer_queue();
-        let cmd_pool = self.core.transfer_cmd_pool();
+        let graphics_queue = self.core.graphics_queue();
+        let cmd_pool = self.core.graphics_cmd_pool();
 
         let cmd_buf = vulkan_abstraction::cmd_buffer::new_command_buffer(cmd_pool, device)?;
         let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
@@ -210,7 +210,7 @@ impl ResourceManager {
             device.end_command_buffer(cmd_buf)?;
         }
 
-        transfer_queue.submit_sync(cmd_buf)?;
+        graphics_queue.submit_sync(cmd_buf)?;
         unsafe { device.free_command_buffers(cmd_pool.inner(), &[cmd_buf]) };
 
         Ok(())

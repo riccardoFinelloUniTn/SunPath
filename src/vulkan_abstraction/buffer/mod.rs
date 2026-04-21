@@ -115,16 +115,7 @@ impl RawBuffer {
 
         let device = core.device().inner();
 
-        let buffer = if queue_family_indices[0] != queue_family_indices[1] {
-            //TODO add parameters to choose concurrency or not
-            let buf_info = vk::BufferCreateInfo::default()
-                .size(byte_size)
-                .usage(buffer_usage_flags)
-                .sharing_mode(vk::SharingMode::CONCURRENT)
-                .queue_family_indices(&queue_family_indices);
-
-            unsafe { device.create_buffer(&buf_info, None) }?
-        } else {
+        let buffer = {
             let buf_info = vk::BufferCreateInfo::default()
                 .size(byte_size)
                 .usage(buffer_usage_flags)
