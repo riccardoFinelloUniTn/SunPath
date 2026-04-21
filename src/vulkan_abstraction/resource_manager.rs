@@ -8,12 +8,11 @@ use rand::{RngExt};
 
 const ARENA_CAPACITY: vk::DeviceSize = 4096;
 
-pub(crate) struct ResourceManager { //TODO ring buffer for cameras and instances_buffer or uniform or something and this would be needed for cpu stuff too if they were ever uses outside of gpu data build
+pub(crate) struct ResourceManager { //TODO ring buffer for cameras and instances_buffer
+    // TODo ring buffering this would be needed for cpu stuff too if they were ever uses outside of gpu data build
     // Camera
     matrices_uniform_buffer: vulkan_abstraction::UniformBuffer<vulkan_abstraction::MatricesBufferContents>,
 
-    // Entity system — single source of truth
-    // GPU-side: EntityGpuData per slot (vertex/index addresses, material, transform)
     entities: vulkan_abstraction::ArenaKeyMappedBuffer<vulkan_abstraction::EntityGpuData>,
     // GPU-side: dedicated transform buffer (stride = 48 bytes = VkTransformMatrixKHR), indexed by the same arena slot.
     // Binding 12 reads this as entity_transform_t[slot] in shaders.
@@ -263,6 +262,7 @@ impl ResourceManager {
     }
 
     /// Create an entity with the given BLAS index, material, and transform.
+    /// Returns the entity ID. After this call the TLAS must be rebuilt by the caller.
     pub fn create_entity(
         &mut self,
         blas_index: u64,
@@ -285,31 +285,25 @@ impl ResourceManager {
             material: Material::from(material),
             blas_instance_index: slot as u64,
         };
+        self.instance_to_entity.insert(slot as u64, id);
         self.entity_data.insert(id, entity);
 
         Ok(vulkan_abstraction::EntityId(id))
     }
 
-    /// Destroy an entity. The arena slot is deferred-freed.
+    /// Destroy an entity, freeing its arena slots. The TLAS must be rebuilt by the caller.
     pub fn destroy_entity(&mut self, id: vulkan_abstraction::EntityId) {
-        self.entities.remove(id.0);
-        self.entity_data.remove(&id.0);
+        if let Some(entity) = self.entity_data.remove(&id.0) {
+            self.instance_to_entity.remove(&entity.blas_instance_index);
+            self.entities.remove(id.0);
+            self.transforms.remove(id.0);
+        }
     }
 
-    /// Update an entity's transform. Does NOT rebuild the TLAS — caller must do that.
+    /// Update an entity's transform. The TLAS must be rebuilt or updated by the caller.
     pub fn set_entity_transform(&mut self, id: vulkan_abstraction::EntityId, transform: vk::TransformMatrixKHR) -> SrResult<()> {
         if let Some(entity) = self.entity_data.get_mut(&id.0) {
             entity.transform = transform;
-
-            let blas = &self.blases[&entity.blas_index];
-            let gpu_data = EntityGpuData {
-                vertex_buffer: blas.vertex_buffer().get_device_address(),
-                index_buffer: blas.index_buffer().get_device_address(),
-                material: entity.material,
-            };
-            let (_slot, copy_region) = self.entities.insert(id.0, &gpu_data)?;
-            self.queue_copy(self.entities.inner_staging(), self.entities.inner(), copy_region);
-
             let (_, xform_copy) = self.transforms.insert(id.0, &transform)?;
             self.queue_copy(self.transforms.inner_staging(), self.transforms.inner(), xform_copy);
         }
@@ -462,16 +456,9 @@ impl ResourceManager {
     pub fn load_scene(&mut self, scene: &crate::Scene, scene_data: crate::SceneData) -> SrResult<()> {
         let mut blases = vec![];
         let (blas_instances, blas_indices, materials, textures, samplers, images, emissive_triangles) =
-            scene.load_into_gpu(&self.core, &mut blases , scene_data)?;
+            scene.load_into_gpu(&self.core, &mut blases, scene_data)?;
 
-
-
-
-        // TLAS rebuild (needs blas_instances which borrows self.blases)
-        self.tlas.rebuild(&blas_instances, &mut self.instances_buffer)?;
-
-
-        // Collect entity creation data and consume blas_instances (drops borrow on self.blases)
+        // Collect entity creation data before consuming blas_instances
         let entity_creation_data: Vec<_> = blas_instances
             .iter()
             .zip(blas_indices.iter())
@@ -479,27 +466,34 @@ impl ResourceManager {
             .map(|((bi, &blas_idx), mat)| (blas_idx, mat.clone(), bi.transform))
             .collect();
 
-        // Set textures, feed emissive data, create entities
+        // Insert BLASes with stable IDs; build a remapping from scene index to manager ID.
+        let blas_id_map: Vec<u64> = blases
+            .into_iter()
+            .map(|blas| {
+                let id = Self::generate(&self.blases);
+                self.blases.insert(id, blas);
+                id
+            })
+            .collect();
+
         self.set_textures(&images, &samplers, &textures);
         self.add_blas_emissive_triangles(&emissive_triangles)?;
 
-        blases.into_iter().enumerate().for_each(|(id, blas_i)| {
-            self.blases.insert(id as u64, blas_i);
-        });
-
-        for (blas_idx, material, transform) in &entity_creation_data {
-            self.create_entity(*blas_idx as u64, material, *transform)?;
+        // Create entities; this assigns arena slots that become gl_InstanceCustomIndexEXT.
+        for (scene_blas_idx, material, transform) in &entity_creation_data {
+            let blas_id = blas_id_map[*scene_blas_idx];
+            self.create_entity(blas_id, material, *transform)?;
         }
+
+        // Rebuild TLAS *after* entity slots are known so instance_custom_index matches.
+        self.rebuild_tlas()?;
 
         self.rebuild_emissive_indirection()?;
 
-        // Take ownership of scene images into the images HashMap
         for image in images {
             self.add_image(image);
         }
         self.samplers = samplers;
-
-
 
         Ok(())
     }
@@ -510,8 +504,6 @@ impl ResourceManager {
         self.matrices_uniform_buffer.inner()
     }
 
-    /// The entities GPU buffer serves as the meshes info storage buffer.
-    /// Shader reads EntityGpuData (vertex/index addresses, material, transform) per slot.
     pub fn get_meshes_info_storage_buffer(&self) -> vk::Buffer {
         self.entities.inner()
     }
