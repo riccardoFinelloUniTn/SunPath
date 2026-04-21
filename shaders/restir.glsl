@@ -25,7 +25,6 @@ uint get_pixel_index(ivec2 coord, vec2 launch_size) {
 }
 
 // Parity selectors: index of the buffer to read history from / write current into.
-// Convention preserved from the legacy code: even frames write A, odd frames write B.
 uint current_reservoir_idx() { return frame_count & 1u; }
 uint history_reservoir_idx() { return (frame_count & 1u) ^ 1u; }
 
