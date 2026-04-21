@@ -254,13 +254,11 @@ impl ResourceManager {
     fn build_entity_gpu_data(
         blas: &vulkan_abstraction::BLAS,
         material: &vulkan_abstraction::gltf::Material,
-        transform: vk::TransformMatrixKHR,
     ) -> EntityGpuData {
         EntityGpuData {
             vertex_buffer: blas.vertex_buffer().get_device_address(),
             index_buffer: blas.index_buffer().get_device_address(),
             material: Material::from(material),
-            transform,
         }
     }
 
@@ -273,7 +271,7 @@ impl ResourceManager {
     ) -> SrResult<vulkan_abstraction::EntityId> {
         let id = Self::generate(&self.entity_data);
 
-        let gpu_data = Self::build_entity_gpu_data(&self.blases[&blas_index], material, transform);
+        let gpu_data = Self::build_entity_gpu_data(&self.blases[&blas_index], material);
         let (slot, copy_region) = self.entities.insert(id, &gpu_data)?;
         self.queue_copy(self.entities.inner_staging(), self.entities.inner(), copy_region);
 
@@ -308,7 +306,6 @@ impl ResourceManager {
                 vertex_buffer: blas.vertex_buffer().get_device_address(),
                 index_buffer: blas.index_buffer().get_device_address(),
                 material: entity.material,
-                transform,
             };
             let (_slot, copy_region) = self.entities.insert(id.0, &gpu_data)?;
             self.queue_copy(self.entities.inner_staging(), self.entities.inner(), copy_region);

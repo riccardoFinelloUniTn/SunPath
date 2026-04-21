@@ -29,7 +29,6 @@ pub(crate) struct EntityGpuData {
     pub(crate) vertex_buffer: vk::DeviceAddress,
     pub(crate) index_buffer: vk::DeviceAddress,
     pub(crate) material: Material,
-    pub(crate) transform : vk::TransformMatrixKHR
 }
 
 
