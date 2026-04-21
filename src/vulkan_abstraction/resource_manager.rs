@@ -166,8 +166,54 @@ impl ResourceManager {
     }
 
 
-    pub fn start_of_frame(&mut self) {
+    pub fn start_of_frame(&mut self) -> SrResult<()> {
+        if self.buffer_copies_queued.is_empty() {
+            return Ok(());
+        }
 
+        let copies = std::mem::take(&mut self.buffer_copies_queued);
+
+        let device = self.core.device().inner();
+        let transfer_queue = self.core.transfer_queue();
+        let cmd_pool = self.core.transfer_cmd_pool();
+
+        let cmd_buf = vulkan_abstraction::cmd_buffer::new_command_buffer(cmd_pool, device)?;
+        let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+
+        unsafe {
+            device.begin_command_buffer(cmd_buf, &begin_info)?;
+
+            for (src, dst, region) in &copies {
+                device.cmd_copy_buffer(cmd_buf, *src, *dst, std::slice::from_ref(region));
+            }
+
+            let unique_dsts: std::collections::HashSet<vk::Buffer> = copies.iter().map(|(_, dst, _)| *dst).collect();
+            let barriers: Vec<vk::BufferMemoryBarrier2> = unique_dsts
+                .into_iter()
+                .map(|buf| {
+                    vk::BufferMemoryBarrier2::default()
+                        .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
+                        .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
+                        .dst_stage_mask(
+                            vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR | vk::PipelineStageFlags2::COMPUTE_SHADER,
+                        )
+                        .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+                        .buffer(buf)
+                        .offset(0)
+                        .size(vk::WHOLE_SIZE)
+                })
+                .collect();
+
+            let dependency_info = vk::DependencyInfo::default().buffer_memory_barriers(&barriers);
+            device.cmd_pipeline_barrier2(cmd_buf, &dependency_info);
+
+            device.end_command_buffer(cmd_buf)?;
+        }
+
+        transfer_queue.submit_sync(cmd_buf)?;
+        unsafe { device.free_command_buffers(cmd_pool.inner(), &[cmd_buf]) };
+
+        Ok(())
     }
 
     // ─── Camera ──────────────────────────────────────────────────────────────
@@ -219,8 +265,7 @@ impl ResourceManager {
         let gpu_data = Self::build_entity_gpu_data(&self.blases[&blas_index], material, transform);
         let (_slot, copy_region) = self.entities.insert(id, &gpu_data)?;
 
-        // Flush entity GPU data to GPU
-        self.flush_single_copy(self.entities.inner_staging(), self.entities.inner(), &[copy_region])?;
+        self.queue_copy(self.entities.inner_staging(), self.entities.inner(), copy_region);
 
         let entity = vulkan_abstraction::Entity {
             id: vulkan_abstraction::EntityId(id),
@@ -254,7 +299,7 @@ impl ResourceManager {
             };
             let (_slot, copy_region) = self.entities.insert(id.0, &gpu_data)?;
 
-            self.flush_single_copy(self.entities.inner_staging(), self.entities.inner(), &[copy_region])?;
+            self.queue_copy(self.entities.inner_staging(), self.entities.inner(), copy_region);
         }
         Ok(())
     }
@@ -276,17 +321,12 @@ impl ResourceManager {
             return Ok(());
         }
 
-        let mut copy_regions = Vec::with_capacity(triangles.len());
         for tri in triangles {
             let (_slot, copy_region) = self.blas_emissive_triangles.allocate_and_update(tri)?;
-            copy_regions.push(copy_region);
+            self.queue_copy(self.blas_emissive_triangles.inner_staging(), self.blas_emissive_triangles.inner(), copy_region);
         }
 
-        self.flush_single_copy(
-            self.blas_emissive_triangles.inner_staging(),
-            self.blas_emissive_triangles.inner(),
-            &copy_regions,
-        )
+        Ok(())
     }
 
     /// Rebuild the dense emissive indirection buffer from all live entities and their BLASes' ranges.
@@ -484,42 +524,8 @@ impl ResourceManager {
 
     // ─── Internal helpers ────────────────────────────────────────────────────
 
-    fn flush_single_copy(&self, src: vk::Buffer, dst: vk::Buffer, copy_regions: &[vk::BufferCopy]) -> SrResult<()> {
-        if copy_regions.is_empty() {
-            return Ok(());
-        }
-
-        let device = self.core.device().inner();
-        let transfer_queue = self.core.transfer_queue();
-        let cmd_pool = self.core.transfer_cmd_pool();
-
-        let cmd_buf = vulkan_abstraction::cmd_buffer::new_command_buffer(cmd_pool, device)?;
-        let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-        unsafe {
-            device.begin_command_buffer(cmd_buf, &begin_info)?;
-
-            device.cmd_copy_buffer(cmd_buf, src, dst, copy_regions);
-
-            let buffer_barrier = vk::BufferMemoryBarrier2::default()
-                .src_stage_mask(vk::PipelineStageFlags2::TRANSFER)
-                .src_access_mask(vk::AccessFlags2::TRANSFER_WRITE)
-                .dst_stage_mask(vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR | vk::PipelineStageFlags2::COMPUTE_SHADER)
-                .dst_access_mask(vk::AccessFlags2::SHADER_READ)
-                .buffer(dst)
-                .offset(0)
-                .size(vk::WHOLE_SIZE);
-
-            let dependency_info = vk::DependencyInfo::default().buffer_memory_barriers(std::slice::from_ref(&buffer_barrier));
-            device.cmd_pipeline_barrier2(cmd_buf, &dependency_info);
-
-            device.end_command_buffer(cmd_buf)?;
-        }
-
-        transfer_queue.submit_sync(cmd_buf)?;
-        unsafe { device.free_command_buffers(cmd_pool.inner(), &[cmd_buf]) };
-
-        Ok(())
+    fn queue_copy(&mut self, src: vk::Buffer, dst: vk::Buffer, region: vk::BufferCopy) {
+        self.buffer_copies_queued.push((src, dst, region));
     }
 
     pub(crate) fn generate<T>(hash_map: &HashMap<u64, T>) -> u64 {

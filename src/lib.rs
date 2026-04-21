@@ -631,7 +631,7 @@ impl Renderer {
         Ok(())
     }
 
-    pub fn load_scene(&mut self, scene: &crate::Scene, scene_data: crate::SceneData) -> SrResult<()> {
+    pub fn load_scene(&mut self, scene: &Scene, scene_data: SceneData) -> SrResult<()> {
         self.resource_manager.load_scene(scene, scene_data)?;
         self.image_dependant_data = HashMap::new();
         Ok(())
@@ -657,6 +657,8 @@ impl Renderer {
     /// ready to be written to (for example after being acquired from a swapchain) and a Fence will be returned
     /// that will be signaled when the rendering is finished (which can be used to know when the Semaphore has no pending operations left).
     pub fn render_to_image(&mut self, dst_image: vk::Image, wait_sem: vk::Semaphore) -> SrResult<vk::Fence> {
+        self.resource_manager.start_of_frame()?;
+
         unsafe {
             self.core.device().inner().device_wait_idle().unwrap();
         }
