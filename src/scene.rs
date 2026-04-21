@@ -36,7 +36,6 @@ impl Scene {
         &self,
         core: &Rc<vulkan_abstraction::Core>,
         blases: &'a mut Vec<vulkan_abstraction::BLAS>,
-        resource_manager: &mut ResourceManager,
         mut scene_data: crate::SceneData,
     ) -> SrResult<(
         Vec<vulkan_abstraction::BlasInstance<'a>>,
@@ -47,11 +46,9 @@ impl Scene {
         Vec<vulkan_abstraction::Image>,
         Vec<vulkan_abstraction::gltf::EmissiveTriangle>,
     )> {
-        
-        
-        
+
         blases.clear();
-    
+
         let mut blas_instances_info = vec![];
         let mut materials = vec![];
         let mut emissive_triangles = vec![];
@@ -115,74 +112,6 @@ impl Scene {
         ))
     }
 
-    pub fn update_gpu_data<'a>(
-        //TODO it currently uses the indices from the gltf which are dense, there will be duplicated indices if two scene are loaded
-        &self,
-        core: &Rc<vulkan_abstraction::Core>,
-        blases: &'a mut Vec<vulkan_abstraction::BLAS>,
-        blases_instances: &'a mut Vec<vulkan_abstraction::BlasInstance<'a>>,
-        mut scene_data: crate::SceneData,
-    ) -> SrResult<(
-        Vec<vulkan_abstraction::gltf::Material>,
-        Vec<vulkan_abstraction::gltf::Texture>,
-        Vec<vulkan_abstraction::image::Sampler>,
-        Vec<vulkan_abstraction::Image>,
-        Vec<vulkan_abstraction::gltf::EmissiveTriangle>,
-    )> {
-        let mut blas_instances_info = vec![];
-        let mut materials = vec![];
-        let mut emissive_triangles = vec![];
-
-        let mut primitives_blas_index: HashMap<vulkan_abstraction::gltf::PrimitiveUniqueKey, usize> = HashMap::new();
-        for node in self.nodes() {
-            self.explore_node(
-                node,
-                core,
-                blases,
-                &mut blas_instances_info,
-                &mut primitives_blas_index,
-                &mut materials,
-                &mut scene_data,
-                &mut emissive_triangles,
-            )?;
-        }
-
-        blases_instances.append(
-            &mut blas_instances_info
-                .into_iter()
-                .enumerate()
-                .map(
-                    |(blas_instance_index, (blas_index, transform))| vulkan_abstraction::BlasInstance {
-                        blas_instance_index: (blas_instance_index + blases_instances.len()) as u32,
-                        blas: &blases[blas_index],
-                        transform: to_vk_transform(transform),
-                    },
-                )
-                .collect::<Vec<_>>(),
-        );
-
-        let samplers: Result<Vec<_>, _> = scene_data
-            .samplers
-            .iter()
-            .map(|sampler| {
-                let default = gltf::texture::MinFilter::Linear;
-
-                vulkan_abstraction::image::Sampler::new(
-                    core.clone(),
-                    vk::Filter::from_gltf(sampler.min_filter.unwrap_or(default)),
-                    vk::Filter::from_gltf(sampler.mag_filter.unwrap_or(gltf::texture::MagFilter::Linear)),
-                    vk::SamplerAddressMode::from_gltf(sampler.wrap_s_u),
-                    vk::SamplerAddressMode::from_gltf(sampler.wrap_t_v),
-                    vk::SamplerAddressMode::REPEAT,
-                    vk::SamplerMipmapMode::from_gltf(sampler.min_filter.unwrap_or(default)),
-                )
-            })
-            .collect();
-
-        let images: Result<Vec<_>, _> = scene_data.images.into_iter().map(|image| to_vk_image(core, image)).collect();
-
-        Ok((materials, scene_data.textures, samplers?, images?, emissive_triangles))
-    }
 
     fn explore_node(
         &self,

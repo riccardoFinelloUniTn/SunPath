@@ -10,9 +10,9 @@ pub struct EntityId(pub u64);
 pub struct Entity {
     pub id: EntityId,
     /// Index into Renderer's blases vec (shared geometry).
-    pub blas_index: usize,
+    pub blas_index: u64,
     /// Index into Renderer's instances buffer.
-    pub blas_instance_index: usize,
+    pub blas_instance_index: u64,
 
     /// GPU-ready material (kept CPU-side to reconstruct EntityGpuData on updates).
     pub material: Material,
@@ -31,3 +31,5 @@ pub(crate) struct EntityGpuData {
     pub(crate) material: Material,
     pub(crate) transform : vk::TransformMatrixKHR
 }
+
+
