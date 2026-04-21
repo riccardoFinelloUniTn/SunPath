@@ -4,7 +4,7 @@ use std::rc::Rc;
 use crate::vulkan_abstraction::{Buffer, EntityGpuData, HostAccessibleBuffer, Material, MatricesBufferContents, BLAS};
 use crate::{error::SrResult, vulkan_abstraction, CameraMatrices, MAX_TLAS_INSTANCES};
 use ash::vk;
-use rand::Rng;
+use rand::{RngExt};
 
 const ARENA_CAPACITY: vk::DeviceSize = 4096;
 
@@ -263,7 +263,7 @@ impl ResourceManager {
         let id = Self::generate(&self.entity_data);
 
         let gpu_data = Self::build_entity_gpu_data(&self.blases[&blas_index], material, transform);
-        let (_slot, copy_region) = self.entities.insert(id, &gpu_data)?;
+        let (slot, copy_region) = self.entities.insert(id, &gpu_data)?;
 
         self.queue_copy(self.entities.inner_staging(), self.entities.inner(), copy_region);
 
@@ -272,7 +272,7 @@ impl ResourceManager {
             blas_index,
             transform,
             material: Material::from(material),
-            blas_instance_index: 0,
+            blas_instance_index: slot as u64,
         };
         self.entity_data.insert(id, entity);
 

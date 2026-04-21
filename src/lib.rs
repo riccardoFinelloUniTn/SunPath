@@ -660,7 +660,7 @@ impl Renderer {
         self.resource_manager.start_of_frame()?;
 
         unsafe {
-            self.core.device().inner().device_wait_idle().unwrap();
+            self.core.device().inner().device_wait_idle()?;
         }
 
         if !self.image_dependant_data.contains_key(&dst_image) {
