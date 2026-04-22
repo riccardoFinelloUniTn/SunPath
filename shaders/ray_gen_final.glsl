@@ -189,27 +189,102 @@ void main() {
                         }
                     }
 
-                    // --- ReSTIR GI: read current-frame indirect sample (Ouyang 2021) ---
-                    // Reconnect x1 -> x2 with a visibility ray, add the cached radiance, then
-                    // terminate the path: GI now carries emission + NEE at x2, so the random-walk
-                    // indirect would double-count. Specular indirect off this rough surface is
-                    // also dropped (acceptable for roughness > 0.2).
-                    ReservoirGI gi_r = read_current_gi_reservoir(pixel_coord);
-                    if (gi_r.W > 0.0) {
-                        vec3 x2_dir = gi_r.sample_pos - hitPos;
-                        float x2_dist = max(length(x2_dir), 0.0001);
-                        x2_dir /= x2_dist;
+                    // --- ReSTIR GI: Stage 5 spatial reuse + visibility reconnection (Ouyang 2021) ---
+                    // Start from the temporal reservoir at this pixel and merge K neighbor
+                    // reservoirs, correcting each for the geometric change in solid angle from
+                    // neighbor's x1 to our x1 (Jacobian, eq. 11). Per-candidate visibility test
+                    // rejects neighbors whose x2 isn't actually visible from us, which is what
+                    // closes the disocclusion stripes along silhouettes: disoccluded pixels keep
+                    // a degenerate temporal reservoir (W≈0 because reconnection geometry failed),
+                    // and spatial neighbors provide the indirect they can't sample themselves.
+                    //
+                    // `combined` is local — never written back to the reservoir buffer — to avoid
+                    // compounding spatial reuse across frames and blurring indirect detail.
+                    ReservoirGI combined = read_current_gi_reservoir(pixel_coord);
 
-                        float gi_NdotL = max(dot(hit_normal, x2_dir), 0.0);
+                    const int   GI_SPATIAL_SAMPLES = 3;
+                    const float GI_SPATIAL_RADIUS  = 20.0;
+                    float gi_current_depth = length(hitPos - origin.xyz);
+
+                    for (int s = 0; s < GI_SPATIAL_SAMPLES; s++) {
+                        float gi_angle  = rnd() * 2.0 * 3.14159;
+                        float gi_radius = sqrt(rnd()) * GI_SPATIAL_RADIUS;
+                        ivec2 nc = pixel_coord + ivec2(cos(gi_angle) * gi_radius, sin(gi_angle) * gi_radius);
+
+                        if (nc == pixel_coord) continue;
+                        if (nc.x < 0 || nc.y < 0 || nc.x >= gl_LaunchSizeEXT.x || nc.y >= gl_LaunchSizeEXT.y) continue;
+
+                        vec3  neighbor_normal = imageLoad(normal_image, nc).xyz;
+                        float neighbor_depth  = imageLoad(depth_image,  nc).x;
+
+                        // G-buffer gating on x1 (same thresholds as DI spatial reuse above).
+                        if (dot(hit_normal, neighbor_normal) < 0.9) continue;
+                        if (abs(gi_current_depth - neighbor_depth) > 0.1 * gi_current_depth) continue;
+
+                        ReservoirGI neighbor_r = read_current_gi_reservoir(nc);
+                        if (neighbor_r.W <= 0.0) continue;
+
+                        // Reconstruct neighbor_x1 from its primary ray and stored virtual_distance.
+                        // The cached depth is the virtual distance through any mirror chain, so
+                        // origin + primary_dir * depth gives the virtual-image shading point the
+                        // reservoir was written against. For plain diffuse pixels this is the
+                        // real hit.
+                        vec2 npc = vec2(nc) + vec2(0.5);
+                        vec2 nUV = npc / vec2(gl_LaunchSizeEXT.xy);
+                        vec2 nd  = nUV * 2.0 - 1.0;
+                        vec4 nt  = matrices_uniform_buffer.proj_inverse * vec4(nd.x, nd.y, 1, 1);
+                        vec4 ndir = matrices_uniform_buffer.view_inverse * vec4(normalize(nt.xyz), 0);
+                        vec3 neighbor_x1 = origin.xyz + ndir.xyz * neighbor_depth;
+
+                        // Ouyang 2021 eq. 11: J = (cos(phi_new) * d_old^2) / (cos(phi_old) * d_new^2)
+                        // where phi is the angle at x2 between the surface normal there and the
+                        // incoming connection direction, and d is the length of the connection.
+                        vec3  w_new = neighbor_r.sample_pos - hitPos;
+                        vec3  w_old = neighbor_r.sample_pos - neighbor_x1;
+                        float d_new = max(length(w_new), 1e-4);
+                        float d_old = max(length(w_old), 1e-4);
+                        vec3  n_x2  = unpack_normal(neighbor_r.sample_normal_packed);
+                        float cos_new = max(dot(n_x2, -w_new / d_new), 0.0);
+                        float cos_old = max(dot(n_x2, -w_old / d_old), 0.0);
+                        if (cos_new <= 0.0 || cos_old <= 0.0) continue;
+
+                        float jacobian = (cos_new * d_old * d_old) / max(cos_old * d_new * d_new, 1e-4);
+                        jacobian = clamp(jacobian, 0.0, 10.0);
+
+                        // Per-candidate visibility: reject if x2 not visible from our x1.
+                        vec3 gi_spatial_dir = w_new / d_new;
+                        if (dot(hit_normal, gi_spatial_dir) <= 0.0) continue;
+                        uint gi_spatial_vis = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT;
+                        prd.dist = 1.0;
+                        traceRayEXT(tlas, gi_spatial_vis, 0xFF, 0, 0, 0, hitPos, 0.001, gi_spatial_dir, d_new - 0.001, 0);
+                        if (prd.dist >= 0.0) continue; // occluded — don't bleed energy across silhouettes
+
+                        float p_hat_neighbor = gi_target_pdf(hitPos, hit_normal, hit_albedo, metallic, neighbor_r.sample_pos, neighbor_r.sample_radiance);
+                        merge_reservoirs_gi(combined, neighbor_r, p_hat_neighbor, jacobian, rnd());
+                    }
+
+                    // Final W from the selected sample under our target pdf.
+                    float p_hat_final = gi_target_pdf(hitPos, hit_normal, hit_albedo, metallic, combined.sample_pos, combined.sample_radiance);
+                    combined.W = (p_hat_final > 1e-6) ? (combined.w_sum / max(combined.M, 1.0) / p_hat_final) : 0.0;
+
+                    // Shade with `combined`. One more visibility ray is required: the selected
+                    // sample might be the temporal center (not tested above) or might have slid
+                    // behind an occluder since the per-candidate test. We already proved
+                    // visibility for spatial candidates so for them this is a re-check; cheap.
+                    if (combined.W > 0.0) {
+                        vec3 gi_x2_dir = combined.sample_pos - hitPos;
+                        float gi_x2_dist = max(length(gi_x2_dir), 0.0001);
+                        gi_x2_dir /= gi_x2_dist;
+
+                        float gi_NdotL = max(dot(hit_normal, gi_x2_dir), 0.0);
                         if (gi_NdotL > 0.0) {
-                            uint vis_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT;
+                            uint gi_final_vis = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT;
                             prd.dist = 1.0;
-                            traceRayEXT(tlas, vis_flags, 0xFF, 0, 0, 0, hitPos, 0.001, x2_dir, x2_dist - 0.001, 0);
+                            traceRayEXT(tlas, gi_final_vis, 0xFF, 0, 0, 0, hitPos, 0.001, gi_x2_dir, gi_x2_dist - 0.001, 0);
 
                             if (prd.dist < 0.0) {
-                                // Same diffuse target function used when the reservoir was written.
                                 vec3 gi_f_diffuse = hit_albedo * (1.0 - metallic) / 3.14159;
-                                radiance += gi_r.sample_radiance * gi_f_diffuse * gi_NdotL * gi_r.W * throughput;
+                                radiance += combined.sample_radiance * gi_f_diffuse * gi_NdotL * combined.W * throughput;
                             }
                         }
                     }
@@ -305,4 +380,7 @@ void main() {
 
     vec3 current_frame_color = total_radiance / float(SAMPLES);
     imageStore(raw_color_image, ivec2(gl_LaunchIDEXT.xy), vec4(current_frame_color, 1.0));
+    //ReservoirGI vis = read_current_gi_reservoir(pixel_coord);
+    //imageStore(raw_color_image, ivec2(gl_LaunchIDEXT.xy), vec4(clamp(vis.W, 0.0, 1.0), clamp(vis.M / 20.0, 0.0, 1.0), 0.0, 1.0));
+
 }

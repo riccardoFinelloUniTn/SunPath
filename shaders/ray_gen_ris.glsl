@@ -232,11 +232,12 @@ void main() {
 
                 // Geometry rejection: normal + depth similarity
                 vec3 hist_normal = unpack_normal(history_r.hit_normal_packed);
-                bool geom_ok = dot(hit_normal, hist_normal) > 0.9
-                            && abs(virtual_distance - history_r.depth) < 0.1 * virtual_distance;
+                bool geom_ok = dot(hit_normal, hist_normal) > 0.99
+                            && abs(virtual_distance - history_r.depth) < 0.01 * virtual_distance;
 
                 // Light index validity (light count may have changed)
                 bool idx_ok = history_r.light_idx < num_lights;
+
 
                 if (history_r.W > 0.0 && geom_ok && idx_ok) {
                     emissive_triangle_t hist_light = emissive_triangles[history_r.light_idx];
@@ -250,6 +251,7 @@ void main() {
                     float p_hat_merged = max(f_y_merged.r, max(f_y_merged.g, f_y_merged.b));
                     current_r.W = current_r.w_sum / max(current_r.M * p_hat_merged, 0.0001);
                 }
+
             }
         }
     }
@@ -346,19 +348,34 @@ void main() {
         ivec2 prev_coord_gi = ivec2(prev_uv * vec2(gl_LaunchSizeEXT.xy));
         if (prev_coord_gi.x >= 0 && prev_coord_gi.y >= 0 && prev_coord_gi.x < gl_LaunchSizeEXT.x && prev_coord_gi.y < gl_LaunchSizeEXT.y) {
             ReservoirGI history_gi = read_history_gi_reservoir(prev_coord_gi);
-            history_gi.M = min(history_gi.M, 20.0);
 
+            // Soft geometry confidence instead of a hard pass/fail gate. The hard gate flips
+            // abruptly at an iso-depth / iso-normal contour, which on flat surfaces is nearly
+            // horizontal in screen space — the result is a visible horizontal seam where
+            // temporally-accumulated pixels meet single-sample pixels. Replacing the boolean
+            // with a smoothstep over both the normal and depth similarity, and using the
+            // product as a multiplier on history M, makes the W-jump across that boundary
+            // continuous so the seam becomes a smooth gradient instead of a bar.
             vec3 gi_hist_normal = unpack_normal(history_gi.hit_normal_packed);
-            bool gi_geom_ok = dot(hit_normal, gi_hist_normal) > 0.9
-                           && abs(virtual_distance - history_gi.depth) < 0.05 * virtual_distance;
+            float normal_conf = smoothstep(0.8, 0.95, dot(hit_normal, gi_hist_normal));
+            float depth_diff  = abs(virtual_distance - history_gi.depth) / max(virtual_distance, 1e-4);
+            float depth_conf  = 1.0 - smoothstep(0.05, 0.12, depth_diff);
+            float conf        = normal_conf * depth_conf;
 
-            if (history_gi.W > 0.0 && gi_geom_ok) {
+            // Cap + confidence-weight history M. At conf=1 we allow full 20-sample memory;
+            // at conf=0 we contribute zero weight (equivalent to the old hard reject).
+            history_gi.M = min(history_gi.M, 20.0) * conf;
+
+            if (history_gi.W > 0.0 && history_gi.M > 0.0) {
                 float p_hat_hist = gi_target_pdf(hitPos, hit_normal, hit_albedo, metallic, history_gi.sample_pos, history_gi.sample_radiance);
 
                 merge_reservoirs_gi(current_gi_r, history_gi, p_hat_hist, 1.0, rnd());
 
+                // Floor on p_hat_merged prevents a degenerate reconnection (tiny NdotL or
+                // near-black radiance) from turning W into a screen-space spike, which also
+                // reads as a band when it lines up with the confidence boundary.
                 float p_hat_merged = gi_target_pdf(hitPos, hit_normal, hit_albedo, metallic, current_gi_r.sample_pos, current_gi_r.sample_radiance);
-                current_gi_r.W = (p_hat_merged > 0.0) ? (current_gi_r.w_sum / (current_gi_r.M * p_hat_merged)) : 0.0;
+                current_gi_r.W = (p_hat_merged > 1e-6) ? (current_gi_r.w_sum / (current_gi_r.M * p_hat_merged)) : 0.0;
             }
         }
     }
