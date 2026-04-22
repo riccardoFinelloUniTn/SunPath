@@ -120,16 +120,29 @@ void main() {
         }
         // Diffuse Object Hit
         else {
+            // virtual_world_pos: point at virtual_distance along the primary ray. For the typical
+            // direct-diffuse hit this equals hitPos; for mirror-chain-then-diffuse hits it's the
+            // virtual image location, which matches the depth we store in the reservoir so the
+            // temporal geometry check is consistent.
             vec3 virtual_world_pos = origin.xyz + direction.xyz * virtual_distance;
             vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(virtual_world_pos, 1.0);
 
-            prev_valid = prev_clip.w > 0.0;
+            // Require a safely-in-front-of-previous-camera w (not just >0) so that near-plane
+            // grazing points can't blow prev_ndc up to arbitrary values. Very small positive w
+            // produced a row-dependent band of garbage prev_uv that the in-bounds UV check alone
+            // wouldn't catch reliably.
+            const float MIN_PREV_W = 0.01;
+            prev_valid = prev_clip.w > MIN_PREV_W;
             if (prev_valid) {
                 vec2 prev_ndc = prev_clip.xy / prev_clip.w;
                 prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
                 prev_valid = all(greaterThanEqual(prev_uv, vec2(0.0))) && all(lessThan(prev_uv, vec2(1.0)));
             }
-            vec2 motion_vector = inUV - prev_uv;
+            // Canonical out-of-range motion vector when reprojection is invalid: guarantees
+            // TAA / DI / GI history reads all reject this pixel instead of reading a random
+            // in-bounds neighbour row (was the mechanism behind the horizontal-band ghosting
+            // visible at high resolutions).
+            vec2 motion_vector = prev_valid ? (inUV - prev_uv) : (inUV + vec2(2.0));
             vec3 denoiser_albedo = mix(hit_albedo, vec3(1.0), metallic);
 
             imageStore(depth_image, pixel_coord, vec4(virtual_distance, 0.0, 0.0, 0.0));
@@ -147,9 +160,13 @@ void main() {
         // prev_view_proj with w=0, which is the standard trick for points at infinity. Writing a
         // plain vec4(0.0) here made TAA think the sky was static and ghosted the horizon during
         // camera rotation — very visible at the top of the screen in high-res scenes.
-        vec2 sky_motion = inUV + vec2(1.0); // default: out-of-range, rejected by TAA
+        vec2 sky_motion = inUV + vec2(2.0); // default: guaranteed out-of-range, rejected by TAA
         vec4 sky_prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(rayDir, 0.0);
-        if (sky_prev_clip.w > 0.0) {
+        // Same small-w guard as the diffuse path: directions that point near-perpendicular to the
+        // previous camera forward axis produce tiny positive w and therefore explosive NDC, which
+        // shows up as a row of bogus sky motion vectors at the horizon.
+        const float MIN_SKY_W = 0.01;
+        if (sky_prev_clip.w > MIN_SKY_W) {
             vec2 sky_prev_ndc = sky_prev_clip.xy / sky_prev_clip.w;
             vec2 sky_prev_uv  = sky_prev_ndc * 0.5 + 0.5;
             if (all(greaterThanEqual(sky_prev_uv, vec2(0.0))) && all(lessThan(sky_prev_uv, vec2(1.0)))) {
@@ -321,18 +338,15 @@ void main() {
         current_gi_r.sample_radiance      = sample_radiance;
     }
 
-    // Phase 4: ReSTIR GI — Temporal Reuse (Ouyang 2021, Sec. 5.3).
     // Reproject with the motion vector, validate normal+depth, cap M, merge with jacobian=1
     // (shading point is approximately unchanged across the temporal shift).
-    //
-    // GI is more sensitive to stale history than DI (sample_radiance is baked, not re-evaluated),
-    // so the caps are stricter: M <= 6 adapts in ~6 frames, and the depth reject is tightened to
-    // 5% so nearby surfaces at similar depths can't cross-contaminate.
+
+
     if (frame_count > 0 && prev_valid) {
         ivec2 prev_coord_gi = ivec2(prev_uv * vec2(gl_LaunchSizeEXT.xy));
         if (prev_coord_gi.x >= 0 && prev_coord_gi.y >= 0 && prev_coord_gi.x < gl_LaunchSizeEXT.x && prev_coord_gi.y < gl_LaunchSizeEXT.y) {
             ReservoirGI history_gi = read_history_gi_reservoir(prev_coord_gi);
-            history_gi.M = min(history_gi.M, 6.0);
+            history_gi.M = min(history_gi.M, 20.0);
 
             vec3 gi_hist_normal = unpack_normal(history_gi.hit_normal_packed);
             bool gi_geom_ok = dot(hit_normal, gi_hist_normal) > 0.9
@@ -348,6 +362,7 @@ void main() {
             }
         }
     }
+
 
     // Store geometry for next frame's temporal validation (same scheme as DI reservoir).
     current_gi_r.hit_normal_packed = pack_normal(hit_normal);

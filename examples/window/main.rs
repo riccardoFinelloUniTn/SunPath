@@ -75,7 +75,7 @@ impl Default for App {
 }
 
 /// The number of concurrent frames that are processed (both by CPU and GPU).
-const MAX_FRAMES_IN_FLIGHT: usize = 4;
+const MAX_FRAMES_IN_FLIGHT: usize = 1;
 
 impl App {
     fn build_resources(&mut self, size: (u32, u32)) -> SrResult<()> {
@@ -94,7 +94,7 @@ impl App {
         let (mut renderer, surface) =
             sunray::Renderer::new_with_surface(size, vk::Format::R8G8B8A8_SRGB, instance_exts, &create_surface)?;
 
-        renderer.load_gltf("examples/assets/Room.glb")?;
+        renderer.load_gltf("examples/assets/ReflectionRoom.glb")?;
 
         //take ownership of the surface
         let surface = surface::Surface::new(renderer.core().entry(), renderer.core().instance(), surface);
