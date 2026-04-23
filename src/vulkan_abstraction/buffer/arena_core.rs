@@ -15,7 +15,7 @@ pub trait ArenaBuffer: Buffer {
     /// Number of element slots the arena can hold.
     fn capacity(&self) -> vk::DeviceSize;
     /// Reclaim slots whose deferred-free delay has elapsed.
-    fn process_pending_frees(&mut self, current_frame: u64);
+    fn process_pending_frees(&mut self);
 }
 
 /// Implements `Buffer` and `ArenaBuffer` for arena types backed by an `ArenaRingCore`.
@@ -57,8 +57,8 @@ macro_rules! impl_arena_ring_buffer {
 
         impl<T: Copy> super::ArenaBuffer for $struct_name<T> {
             fn capacity(&self) -> ash::vk::DeviceSize { self.$ring_field.capacity() }
-            fn process_pending_frees(&mut self, current_frame: u64) {
-                self.$ring_field.process_pending_frees(current_frame);
+            fn process_pending_frees(&mut self) {
+                self.$ring_field.process_pending_frees();
             }
 
         }
@@ -212,7 +212,8 @@ impl<T: Copy> ArenaRingCore<T> {
         self.pending_free_slots.push_back((current_frame, slot));
     }
 
-    pub fn process_pending_frees(&mut self, current_frame: u64) {
+    pub fn process_pending_frees(&mut self) {
+        let current_frame = *self.core.absolute_frame_count.borrow() as u64;
         while let Some(&(frame_freed, slot)) = self.pending_free_slots.front() {
             if current_frame >= frame_freed + MAX_FRAMES_IN_FLIGHT as u64 {
                 self.free_slots.push(slot);

@@ -6,6 +6,7 @@ use ash::vk;
 use ash::vk::DeviceSize;
 use std::marker::PhantomData;
 use std::rc::Rc;
+use log::info;
 
 pub struct StagingBuffer<T> {
     raw: RawBuffer,
@@ -149,6 +150,7 @@ impl<T> StagingBuffer<T> {
             )));
         }
 
+
         let device = self.raw.core.device().inner();
         let transfer_family = self.raw.core.transfer_queue().queue_family_index();
         let graphics_family = self.raw.core.graphics_queue().queue_family_index();
@@ -231,7 +233,7 @@ impl<T> StagingBuffer<T> {
             unsafe { device.cmd_pipeline_barrier2(graphics_cmd, &dep) };
 
             unsafe { device.end_command_buffer(graphics_cmd) }?;
-            self.raw.core.graphics_queue().submit_sync(graphics_cmd)?;
+             self.raw.core.graphics_queue().submit_sync(graphics_cmd)?;
             unsafe { device.free_command_buffers(self.raw.core.graphics_cmd_pool().inner(), &[graphics_cmd]) };
         }
 

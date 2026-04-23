@@ -275,7 +275,7 @@ impl AccelerationStructure {
                 .free_command_buffers(self.core.graphics_cmd_pool().inner(), &[build_command_buffer]);
         }
 
-        log::debug!("{:?} acceleration structure updated", self.level);
+        //log::debug!("{:?} acceleration structure updated", self.level);
 
         Ok(())
     }

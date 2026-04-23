@@ -129,7 +129,9 @@ impl<T: Copy> ArenaBuffer for ArenaHostBuffer<T> {
         self.capacity
     }
 
-    fn process_pending_frees(&mut self, current_frame: u64) {
+    fn process_pending_frees(&mut self) {
+        let current_frame = *self.core.absolute_frame_count.borrow() as u64;
+
         while let Some(&(frame_freed, slot)) = self.pending_free_slots.front() {
             if current_frame >= frame_freed + MAX_FRAMES_IN_FLIGHT as u64 {
                 self.free_slots.push(slot);

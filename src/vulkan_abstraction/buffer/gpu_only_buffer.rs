@@ -26,7 +26,7 @@ impl GpuOnlyBuffer {
             usage | vk::BufferUsageFlags::TRANSFER_DST,
             name,
         )?;
-        log::debug!("New Gpu Buffer with these usage flags {usage:?}");
+        // log::debug!("New Gpu Buffer with these usage flags {usage:?}");
         Ok(Self { raw })
     }
 

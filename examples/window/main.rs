@@ -4,6 +4,8 @@ use std::rc::Rc;
 use ash::vk;
 use nalgebra as na;
 use std::time::Instant;
+use log::info;
+use rand::random_range;
 use sunray::{
     MAX_FRAMES_IN_FLIGHT,
     camera::Camera,
@@ -18,6 +20,7 @@ use winit::{
     raw_window_handle_05::{HasRawDisplayHandle, HasRawWindowHandle},
     window::{CursorGrabMode, Window},
 };
+use sunray::vulkan_abstraction::EntityId;
 
 mod surface;
 mod swapchain;
@@ -52,6 +55,10 @@ struct App {
     keys_down: HashSet<KeyCode>,
     mouse_captured: bool,
     last_frame_time: Option<Instant>,
+
+    // --- RUNTIME RESOURCE TEST ---
+    scene_entities: Vec<sunray::vulkan_abstraction::EntityId>,
+    spawned_entity: Option<sunray::vulkan_abstraction::EntityId>,
 }
 
 impl Default for App {
@@ -71,6 +78,9 @@ impl Default for App {
             keys_down: HashSet::new(),
             mouse_captured: false,
             last_frame_time: None,
+
+            scene_entities: Vec::new(),
+            spawned_entity: None,
         }
     }
 }
@@ -92,7 +102,8 @@ impl App {
         let (mut renderer, surface) =
             sunray::Renderer::new_with_surface(size, vk::Format::R8G8B8A8_SRGB, instance_exts, &create_surface)?;
 
-        renderer.load_gltf("examples/assets/Room.glb")?;
+        self.scene_entities = renderer.load_gltf("examples/assets/Room.glb")?;
+        log::info!("Loaded {} entities from scene", self.scene_entities.len());
 
         //take ownership of the surface
         let surface = surface::Surface::new(renderer.core().entry(), renderer.core().instance(), surface);
@@ -320,11 +331,7 @@ impl App {
 
         self.res_mut().renderer.set_camera(camera)?;
 
-        // let rotation = na::Rotation3::from_axis_angle(&na::Vector3::y_axis(), time);
-        // self.res_mut().renderer.set_object_transform(3, rotation.to_homogeneous());
-
-        //TODO it is more costly than expected and need fences and semaphores
-        //  self.res_mut().renderer.rebuild_tlas()?;
+        //self.update_runtime_test()?;
 
         let frame_index = self.frame_count as usize % MAX_FRAMES_IN_FLIGHT;
 
@@ -371,6 +378,76 @@ impl App {
 
         self.frame_count += 1;
         self.window.as_ref().unwrap().request_redraw();
+        Ok(())
+    }
+
+    /// Exercises runtime add / move / remove of entities each frame.
+    fn update_runtime_test(&mut self) -> SrResult<()> {
+
+        let frame = self.frame_count;
+
+        // if !self.scene_entities.is_empty() {
+        //     let id = self.scene_entities.pop().unwrap().0;
+        //     return self.res_mut().renderer.destroy_entity(EntityId(id));
+        // }
+
+
+
+        // Animate the first loaded entity: orbit around Y every frame.
+        let src = self.scene_entities.first();
+        if let Some(src) = src {
+            let src = *src;
+            let angle = frame as f32 * 0.0001;
+            let (s, c) = angle.sin_cos();
+            let radius = 3.0_f32;
+            let translation = na::Translation3::new(c * radius, 0.0, s * radius);
+            let rotation = na::UnitQuaternion::from_axis_angle(&na::Vector3::y_axis(), angle);
+            let transform = (translation * rotation).to_homogeneous();
+            self.res_mut().renderer.set_entity_transform(src, transform)?;
+            self.res_mut().renderer.rebuild_tlas()?;
+        }
+
+
+        // At frame 120 spawn a duplicate of the first entity offset to the side.
+        if frame % 120  == 1 {
+            let src = self.scene_entities[random_range(0..self.scene_entities.len())];
+
+                let offset = na::Translation3::new(4.0, 0.0, 0.0).to_homogeneous();
+                match self.res_mut().renderer.duplicate_entity(src, offset) {
+                    Ok(id) => {
+                        self.spawned_entity = Some(id);
+                        // duplicate_entity calls clear_image_dependent_data(), which drops the
+                        // CmdBuffers whose fences were returned by render_to_image. Those
+                        // VkFence handles are now destroyed; null them out so draw()'s
+                        // wait_fence() skips the stale handles next frame.
+                        for fence in self.res_mut().img_rendered_fences.iter_mut() {
+                            *fence = vk::Fence::null();
+                        }
+                        log::info!("[runtime test] spawned duplicate entity {:?}", id);
+                    }
+                    Err(e) => log::error!("[runtime test] duplicate_entity failed: {e}"),
+                }
+        }
+
+        // At frame 240 remove the spawned duplicate.
+        if  frame % 240  == 1 {
+
+            if let Some(id) = self.spawned_entity.take() {
+                match self.res_mut().renderer.destroy_entity(id) {
+                    Ok(()) => {
+                        // duplicate_entity calls clear_image_dependent_data(), which drops the
+                        // CmdBuffers whose fences were returned by render_to_image. Those
+                        // VkFence handles are now destroyed; null them out so draw()'s
+                        // wait_fence() skips the stale handles next frame.
+                        for fence in self.res_mut().img_rendered_fences.iter_mut() {
+                            *fence = vk::Fence::null();
+                        }
+                        log::info!("[runtime test] removed entity {:?}", id) },
+                    Err(e) => log::error!("[runtime test] destroy_entity failed: {e}"),
+                }
+            }
+        }
+
         Ok(())
     }
 

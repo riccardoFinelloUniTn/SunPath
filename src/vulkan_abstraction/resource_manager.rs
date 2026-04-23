@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::vulkan_abstraction::{Buffer, EntityGpuData, HostAccessibleBuffer, Material, MatricesBufferContents, BLAS};
+use crate::vulkan_abstraction::{ArenaBuffer, Buffer, EntityGpuData, HostAccessibleBuffer, Material, MatricesBufferContents, BLAS};
 use crate::{error::SrResult, vulkan_abstraction, CameraMatrices, MAX_TLAS_INSTANCES};
 use ash::vk;
+use log::info;
 use rand::{RngExt};
 
 const ARENA_CAPACITY: vk::DeviceSize = 4096;
@@ -177,11 +178,26 @@ impl ResourceManager {
 
 
     pub fn start_of_frame(&mut self) -> SrResult<()> {
+        let frame =
+        self.entities.process_pending_frees();
+        self.blas_emissive_triangles.process_pending_frees();
+        self.transforms.process_pending_frees();
+
+
+
         if self.buffer_copies_queued.is_empty() {
             return Ok(());
         }
 
         let copies = std::mem::take(&mut self.buffer_copies_queued);
+
+
+        let mut seen: HashMap<(vk::Buffer, vk::DeviceSize, vk::DeviceSize), usize> = HashMap::new();
+        for (i, (_, dst, region)) in copies.iter().enumerate() {
+            seen.insert((*dst, region.dst_offset, region.size), i);
+        }
+        let copies: Vec<_> = seen.values().map(|&i| copies[i]).collect();
+
 
         let device = self.core.device().inner();
         let graphics_queue = self.core.graphics_queue();
@@ -207,7 +223,7 @@ impl ResourceManager {
                         .dst_stage_mask(
                             vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR | vk::PipelineStageFlags2::COMPUTE_SHADER,
                         )
-                        .dst_access_mask(vk::AccessFlags2::SHADER_READ)
+                        .dst_access_mask(vk::AccessFlags2::SHADER_READ )
                         .buffer(buf)
                         .offset(0)
                         .size(vk::WHOLE_SIZE)
@@ -273,10 +289,10 @@ impl ResourceManager {
 
         let gpu_data = Self::build_entity_gpu_data(&self.blases[&blas_index], material);
         let (slot, copy_region) = self.entities.insert(id, &gpu_data)?;
-        self.queue_copy(self.entities.inner_staging(), self.entities.inner(), copy_region);
+        self.copy_commands_queue(self.entities.inner_staging(), self.entities.inner(), copy_region);
 
         let (_, xform_copy) = self.transforms.insert(id, &transform)?;
-        self.queue_copy(self.transforms.inner_staging(), self.transforms.inner(), xform_copy);
+        self.copy_commands_queue(self.transforms.inner_staging(), self.transforms.inner(), xform_copy);
 
         let entity = vulkan_abstraction::Entity {
             id: vulkan_abstraction::EntityId(id),
@@ -305,7 +321,7 @@ impl ResourceManager {
         if let Some(entity) = self.entity_data.get_mut(&id.0) {
             entity.transform = transform;
             let (_, xform_copy) = self.transforms.insert(id.0, &transform)?;
-            self.queue_copy(self.transforms.inner_staging(), self.transforms.inner(), xform_copy);
+            self.copy_commands_queue(self.transforms.inner_staging(), self.transforms.inner(), xform_copy);
         }
         Ok(())
     }
@@ -329,7 +345,7 @@ impl ResourceManager {
 
         for tri in triangles {
             let (_slot, copy_region) = self.blas_emissive_triangles.allocate_and_update(tri)?;
-            self.queue_copy(self.blas_emissive_triangles.inner_staging(), self.blas_emissive_triangles.inner(), copy_region);
+            self.copy_commands_queue(self.blas_emissive_triangles.inner_staging(), self.blas_emissive_triangles.inner(), copy_region);
         }
 
         Ok(())
@@ -453,7 +469,7 @@ impl ResourceManager {
 
     // ─── Scene loading ───────────────────────────────────────────────────────
 
-    pub fn load_scene(&mut self, scene: &crate::Scene, scene_data: crate::SceneData) -> SrResult<()> {
+    pub fn load_scene(&mut self, scene: &crate::Scene, scene_data: crate::SceneData) -> SrResult<Vec<vulkan_abstraction::EntityId>> {
         let mut blases = vec![];
         let (blas_instances, blas_indices, materials, textures, samplers, images, emissive_triangles) =
             scene.load_into_gpu(&self.core, &mut blases, scene_data)?;
@@ -480,9 +496,10 @@ impl ResourceManager {
         self.add_blas_emissive_triangles(&emissive_triangles)?;
 
         // Create entities; this assigns arena slots that become gl_InstanceCustomIndexEXT.
+        let mut entity_ids = Vec::with_capacity(entity_creation_data.len());
         for (scene_blas_idx, material, transform) in &entity_creation_data {
             let blas_id = blas_id_map[*scene_blas_idx];
-            self.create_entity(blas_id, material, *transform)?;
+            entity_ids.push(self.create_entity(blas_id, material, *transform)?);
         }
 
         // Rebuild TLAS *after* entity slots are known so instance_custom_index matches.
@@ -495,7 +512,42 @@ impl ResourceManager {
         }
         self.samplers = samplers;
 
-        Ok(())
+        Ok(entity_ids)
+    }
+
+    /// Spawn a new instance that shares the same BLAS and material as `src` but has a different
+    /// transform. The caller must rebuild the TLAS afterwards.
+    pub fn clone_entity(&mut self, src: vulkan_abstraction::EntityId, transform: vk::TransformMatrixKHR) -> SrResult<vulkan_abstraction::EntityId> {
+        let (blas_index, material) = self
+            .entity_data
+            .get(&src.0)
+            .map(|e| (e.blas_index, e.material))
+            .ok_or_else(|| crate::error::SrError::new_custom(format!("clone_entity: no entity {}", src.0)))?;
+
+        let id = Self::generate(&self.entity_data);
+
+        let gpu_data = EntityGpuData {
+            vertex_buffer: self.blases[&blas_index].vertex_buffer().get_device_address(),
+            index_buffer: self.blases[&blas_index].index_buffer().get_device_address(),
+            material,
+        };
+        let (slot, copy_region) = self.entities.insert(id, &gpu_data)?;
+        self.copy_commands_queue(self.entities.inner_staging(), self.entities.inner(), copy_region);
+
+        let (_, xform_copy) = self.transforms.insert(id, &transform)?;
+        self.copy_commands_queue(self.transforms.inner_staging(), self.transforms.inner(), xform_copy);
+
+        let entity = vulkan_abstraction::Entity {
+            id: vulkan_abstraction::EntityId(id),
+            blas_index,
+            transform,
+            material,
+            blas_instance_index: slot as u64,
+        };
+        self.instance_to_entity.insert(slot as u64, id);
+        self.entity_data.insert(id, entity);
+
+        Ok(vulkan_abstraction::EntityId(id))
     }
 
     // ─── Descriptor set accessors ────────────────────────────────────────────
@@ -526,7 +578,7 @@ impl ResourceManager {
 
     // ─── Internal helpers ────────────────────────────────────────────────────
 
-    fn queue_copy(&mut self, src: vk::Buffer, dst: vk::Buffer, region: vk::BufferCopy) {
+    fn copy_commands_queue(&mut self, src: vk::Buffer, dst: vk::Buffer, region: vk::BufferCopy) {
         self.buffer_copies_queued.push((src, dst, region));
     }
 

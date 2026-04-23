@@ -11,7 +11,7 @@ pub use scene::*;
 use std::{collections::HashMap, rc::Rc};
 
 use ash::vk;
-
+use log::info;
 use crate::utils::env_var_as_bool;
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
@@ -623,18 +623,66 @@ impl Renderer {
         Ok(())
     }
 
-    pub fn load_gltf(&mut self, path: &str) -> SrResult<()> {
+    fn na_mat4_to_vk_transform(m: nalgebra::Matrix4<f32>) -> vk::TransformMatrixKHR {
+        vk::TransformMatrixKHR {
+            matrix: [
+                m.m11, m.m12, m.m13, m.m14,
+                m.m21, m.m22, m.m23, m.m24,
+                m.m31, m.m32, m.m33, m.m34,
+            ],
+        }
+    }
+
+    pub fn load_gltf(&mut self, path: &str) -> SrResult<Vec<vulkan_abstraction::EntityId>> {
         let gltf = vulkan_abstraction::gltf::Gltf::new(Rc::clone(&self.core), path)?;
         let (default_scene, scene_data) = gltf.create_default_scene()?;
+        self.load_scene(&default_scene, scene_data)
+    }
 
-        self.load_scene(&default_scene, scene_data)?;
+    pub fn load_scene(&mut self, scene: &Scene, scene_data: SceneData) -> SrResult<Vec<vulkan_abstraction::EntityId>> {
+        // Wait for all in-flight GPU work before invalidating descriptor sets that reference
+        // buffers which will be reallocated (e.g. emissive_indirection_gpu).
+        unsafe { self.core.device().inner().device_wait_idle() }?;
+        let ids = self.resource_manager.load_scene(scene, scene_data)?;
+        self.image_dependant_data = HashMap::new();
+        Ok(ids)
+    }
+
+    /// Spawn a new instance that shares the BLAS and material of `src` with a new transform.
+    /// Automatically rebuilds the TLAS.
+    pub fn duplicate_entity(
+        &mut self,
+        src: vulkan_abstraction::EntityId,
+        transform: nalgebra::Matrix4<f32>,
+    ) -> SrResult<vulkan_abstraction::EntityId> {
+        let vk_transform = Self::na_mat4_to_vk_transform(transform);
+        let id = self.resource_manager.clone_entity(src, vk_transform)?;
+        self.resource_manager.rebuild_tlas()?;
+        // rebuild_tlas calls AccelerationStructure::rebuild which creates a new
+        // VkAccelerationStructureKHR handle, invalidating any descriptor sets that
+        // reference the old one. Clear them so they are rebuilt on the next frame.
+
+        self.clear_image_dependent_data();
+
+        Ok(id)
+    }
+
+    /// Remove an entity from the scene. Automatically rebuilds the TLAS.
+    pub fn destroy_entity(&mut self, id: vulkan_abstraction::EntityId) -> SrResult<()> {
+        self.resource_manager.destroy_entity(id);
+        self.resource_manager.rebuild_tlas()?;
+        self.clear_image_dependent_data();
         Ok(())
     }
 
-    pub fn load_scene(&mut self, scene: &Scene, scene_data: SceneData) -> SrResult<()> {
-        self.resource_manager.load_scene(scene, scene_data)?;
-        self.image_dependant_data = HashMap::new();
-        Ok(())
+    /// Update an entity's world transform. Does NOT rebuild the TLAS — call `rebuild_tlas` afterwards.
+    pub fn set_entity_transform(
+        &mut self,
+        id: vulkan_abstraction::EntityId,
+        transform: nalgebra::Matrix4<f32>,
+    ) -> SrResult<()> {
+        let vk_transform = Self::na_mat4_to_vk_transform(transform);
+        self.resource_manager.set_entity_transform(id, vk_transform)
     }
 
     pub fn set_camera(&mut self, camera: crate::Camera) -> SrResult<()> {
@@ -1571,6 +1619,7 @@ impl Renderer {
     }
 
     /// Updates the local CPU copy of an object's transform
+    #[deprecated = "use set_entity_transform with a proper EntityId"]
     pub fn set_object_transform(&mut self, instance_id: usize, transform: nalgebra::Matrix4<f32>) {
         // Vulkan expects a 3x4 row-major matrix for raytracing transforms
         let vk_transform = vk::TransformMatrixKHR {
