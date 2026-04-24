@@ -150,6 +150,24 @@ void main() {
             imageStore(diffuse_image, pixel_coord, vec4(denoiser_albedo, 0.0));
             imageStore(motion_vector_image, pixel_coord, vec4(motion_vector, 0.0, 0.0));
 
+            vec2 mv_dbg = inUV - prev_uv;
+            vec3 col;
+            if (!prev_valid) {
+                // which gate failed?
+                if (prev_clip.w <= MIN_PREV_W) {
+                    col = vec3(1.0, 0.0, 0.0);   // RED = w-gate failed
+                } else {
+                    col = vec3(0.0, 0.0, 1.0);   // BLUE = UV-gate failed (off-screen last frame)
+                }
+            } else {
+                col = vec3(0.0, abs(mv_dbg.x) * float(gl_LaunchSizeEXT.x) * 0.05,
+                abs(mv_dbg.y) * float(gl_LaunchSizeEXT.y) * 0.05);
+
+                col = vec3(0.1,0.1,0);
+                // GREEN channels = actual motion magnitude, scaled as before
+            }
+            imageStore(raw_color_image, pixel_coord, vec4(col, 1.0));
+
             found_diffuse_surface = true;
             break;
         }
@@ -178,6 +196,25 @@ void main() {
         imageStore(normal_image, pixel_coord, vec4(0.0));
         imageStore(diffuse_image, pixel_coord, vec4(0.0));
         imageStore(motion_vector_image, pixel_coord, vec4(sky_motion, 0.0, 0.0));
+
+        //TODO remove this as it turns the sky black. Used for debugging
+        vec2 mv_dbg = inUV - prev_uv;
+        vec3 col;
+        if (!prev_valid) {
+            // which gate failed?
+            if (sky_prev_clip.w <= MIN_SKY_W) {
+                col = vec3(1.0, 0.0, 0.0);   // RED = w-gate failed
+            } else {
+                col = vec3(0.0, 0.0, 1.0);   // BLUE = UV-gate failed (off-screen last frame)
+            }
+        } else {
+            col = vec3(0.0, abs(mv_dbg.x) * float(gl_LaunchSizeEXT.x) * 0.05,
+            abs(mv_dbg.y) * float(gl_LaunchSizeEXT.y) * 0.05);
+            // GREEN channels = actual motion magnitude, scaled as before
+        }
+        imageStore(raw_color_image, pixel_coord, vec4(col, 1.0));
+
+
         write_current_reservoir(pixel_coord, Reservoir(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0));
         write_current_gi_reservoir(pixel_coord, ReservoirGI(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0));
         return;

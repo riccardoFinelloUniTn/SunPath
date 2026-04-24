@@ -6,13 +6,39 @@ use nalgebra as na;
 use crate::{CameraMatrices, error::SrResult, vulkan_abstraction};
 
 #[derive(Clone, Copy)]
-#[repr(C, packed)]
+#[repr(C)]
 struct MatricesBufferContents {
     pub view_inverse: na::Matrix4<f32>,
     pub proj_inverse: na::Matrix4<f32>,
     pub view_proj: na::Matrix4<f32>,
     pub prev_view_proj: na::Matrix4<f32>,
 }
+
+// The GLSL UBO (binding=2 in common.glsl) declares 4 mat4 fields under implicit std140,
+// which places them at offsets 0, 64, 128, 192 for a total of 256 bytes. The Rust side
+// MUST match this exactly: any mismatch silently corrupts view_proj / prev_view_proj
+// because those sit at offsets 128 and 192 and a too-small struct would truncate them,
+// while a too-large struct would shift them relative to what the shader reads.
+const _: () = assert!(
+    std::mem::size_of::<MatricesBufferContents>() == 256,
+    "MatricesBufferContents must be exactly 256 bytes to match the std140 UBO layout"
+);
+const _: () = assert!(
+    std::mem::offset_of!(MatricesBufferContents, view_inverse) == 0,
+    "view_inverse must be at offset 0"
+);
+const _: () = assert!(
+    std::mem::offset_of!(MatricesBufferContents, proj_inverse) == 64,
+    "proj_inverse must be at offset 64"
+);
+const _: () = assert!(
+    std::mem::offset_of!(MatricesBufferContents, view_proj) == 128,
+    "view_proj must be at offset 128"
+);
+const _: () = assert!(
+    std::mem::offset_of!(MatricesBufferContents, prev_view_proj) == 192,
+    "prev_view_proj must be at offset 192"
+);
 
 #[derive(Clone, Copy)]
 #[repr(C, packed)]

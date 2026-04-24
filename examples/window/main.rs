@@ -17,6 +17,7 @@ use winit::{
     raw_window_handle_05::{HasRawDisplayHandle, HasRawWindowHandle},
     window::{CursorGrabMode, Window},
 };
+use winit::dpi::LogicalSize;
 
 mod surface;
 mod swapchain;
@@ -94,7 +95,7 @@ impl App {
         let (mut renderer, surface) =
             sunray::Renderer::new_with_surface(size, vk::Format::R8G8B8A8_SRGB, instance_exts, &create_surface)?;
 
-        renderer.load_gltf("examples/assets/heavy_models/subway.glb")?;
+        renderer.load_gltf("examples/assets/room.glb")?;
 
         //take ownership of the surface
         let surface = surface::Surface::new(renderer.core().entry(), renderer.core().instance(), surface);
@@ -446,7 +447,14 @@ impl App {
 
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &event_loop::ActiveEventLoop) {
-        let window = event_loop.create_window(Window::default_attributes()).unwrap();
+        let width = 2000.0;
+        let height = 1280.0;
+
+        let attributes = Window::default_attributes()
+            .with_inner_size(LogicalSize::new(width, height))
+            .with_title("My Cool Renderer"); // Bonus: You can chain other settings here!
+
+        let window = event_loop.create_window(attributes).unwrap();
         let window_size = window.inner_size().into();
         self.window = Some(window);
 
