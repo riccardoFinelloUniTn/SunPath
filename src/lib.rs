@@ -20,7 +20,7 @@ use crate::vulkan_abstraction::{
     TemporalPass,
 };
 
-pub const DENOISE_PASSES: u32 = 4;
+pub const DENOISE_PASSES: u32 = 8;
 
 pub const EXPOSURE: f32 = 1.0;
 

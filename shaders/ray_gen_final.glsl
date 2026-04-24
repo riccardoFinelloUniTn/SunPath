@@ -159,6 +159,14 @@ void main() {
                         if (abs(current_depth - neighbor_depth) > 0.1 * current_depth) continue;
 
                         Reservoir neighbor_r = read_current_reservoir(neighbor_coord);
+                        // Clamp W and M on read so a single spiky neighbor (e.g. a firefly that
+                        // survived the per-hop clamps in the RIS pass) can't dominate the
+                        // spatial merge weight = p_hat * W * M. Without these clamps a neighbor
+                        // with W=50, M=10 contributes 500x a normal neighbor's weight and paints
+                        // its light choice across the entire 30-pixel spatial radius in one pass
+                        // — which is exactly how a 1-pixel firefly becomes a 5-10 pixel splotch.
+                        neighbor_r.W = min(neighbor_r.W, 20.0);
+                        neighbor_r.M = min(neighbor_r.M, 10.0);
                         if (neighbor_r.W > 0.0 && neighbor_r.light_idx < num_lights) {
                             emissive_triangle_t neighbor_light = emissive_triangles[neighbor_r.light_idx];
                             vec3 f_y_neighbor = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, neighbor_light, neighbor_r.light_pos, neighbor_r.light_normal);
@@ -171,7 +179,16 @@ void main() {
                         emissive_triangle_t winner = emissive_triangles[spatial_r.light_idx];
                         vec3 f_y_winner = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, winner, spatial_r.light_pos, spatial_r.light_normal);
                         float p_hat_winner = max(f_y_winner.r, max(f_y_winner.g, f_y_winner.b));
-                        spatial_r.W = spatial_r.w_sum / max(spatial_r.M * p_hat_winner, 0.0001);
+                        // Raise p_hat floor from 1e-4 to 1e-3 so a borderline-visible light can't
+                        // produce a spatial W of ~1e4. With M*p_hat capped at 1e-3, W is bounded
+                        // by w_sum*1000, and we additionally clamp W itself below as a backstop.
+                        spatial_r.W = spatial_r.w_sum / max(spatial_r.M * p_hat_winner, 1e-3);
+                        // Firefly backstop on ReSTIR DI reuse: the "correct" unbiased W can still
+                        // be very large when p_hat_winner is small (grazing angle, near-silhouette
+                        // temporal history) even though the scene radiance is bounded. A per-sample
+                        // cap at 50 preserves all plausible direct shading on diffuse surfaces
+                        // while preventing single-pixel spikes from propagating through TAA.
+                        spatial_r.W = min(spatial_r.W, 50.0);
 
                         vec3 shadow_dir = spatial_r.light_pos - hitPos;
                         float shadow_dist = max(length(shadow_dir), 0.0001);
@@ -223,6 +240,14 @@ void main() {
 
                         ReservoirGI neighbor_r = read_current_gi_reservoir(nc);
                         if (neighbor_r.W <= 0.0) continue;
+                        // Clamp neighbor W and M on read — same rationale as DI spatial reuse
+                        // above. Without these, one spiky GI reservoir in the 20-pixel radius
+                        // wins every merge it enters, and since the spatial merge here replaces
+                        // `combined.sample_pos / sample_radiance` with the neighbor's, the spike
+                        // paints the splotch. Capping both reduces the neighbor's merge weight
+                        // = p_hat * W * M * jacobian so it competes fairly instead of dominating.
+                        neighbor_r.W = min(neighbor_r.W, 10.0);
+                        neighbor_r.M = min(neighbor_r.M, 10.0);
 
                         // Reconstruct neighbor_x1 from its primary ray and stored virtual_distance.
                         // The cached depth is the virtual distance through any mirror chain, so
@@ -264,8 +289,17 @@ void main() {
                     }
 
                     // Final W from the selected sample under our target pdf.
+                    // Epsilon raised from 1e-6 to 1e-3: at 1e-6, a single accumulated frame with
+                    // any non-trivial w_sum produces W ~ 1e6, which even with the min(total, 10)
+                    // clamp at the end of main() gets written with a visible 2-pixel bright speck
+                    // after TAA neighborhood clipping. 1e-3 still admits essentially all real
+                    // indirect contributions (since p_hat = luminance of albedo/π · NdotL · L).
                     float p_hat_final = gi_target_pdf(hitPos, hit_normal, hit_albedo, metallic, combined.sample_pos, combined.sample_radiance);
-                    combined.W = (p_hat_final > 1e-6) ? (combined.w_sum / max(combined.M, 1.0) / p_hat_final) : 0.0;
+                    combined.W = (p_hat_final > 1e-3) ? (combined.w_sum / max(combined.M, 1.0) / p_hat_final) : 0.0;
+                    // Firefly backstop on ReSTIR GI reuse: bound W for the same reason as DI
+                    // above. Cap lower than DI because GI indirect is energetically dimmer —
+                    // a GI sample contributing >20x direct is a numerical artifact, not real.
+                    combined.W = min(combined.W, 20.0);
 
                     // Shade with `combined`. One more visibility ray is required: the selected
                     // sample might be the temporal center (not tested above) or might have slid
@@ -319,8 +353,16 @@ void main() {
 
                         if (prd.dist < 0.0) {
                             float light_area = light.v0_area.w;
-                            float solid_angle_pdf = (light_dist * light_dist) / (cos_theta_light * light_area * float(num_lights));
-                            radiance += (light.emission.rgb * hit_albedo * throughput * cos_theta_surface) / (solid_angle_pdf * 3.14159);
+                            // Floor on cos_theta_light prevents grazing configurations from
+                            // producing tiny solid_angle_pdf → exploding contribution. Without
+                            // this, NEE at a rough indirect bounce is the largest firefly source
+                            // in scenes with one distant light, because whenever the second-bounce
+                            // surface happens to face the light at a shallow angle, the /pdf
+                            // divide produces a single-sample spike that only gets averaged down
+                            // by full-image accumulation (which we don't do here — 1 spp + TAA).
+                            float solid_angle_pdf = (light_dist * light_dist) / max(cos_theta_light * light_area * float(num_lights), 1e-4);
+                            vec3 nee_contrib = (light.emission.rgb * hit_albedo * throughput * cos_theta_surface) / (solid_angle_pdf * 3.14159);
+                            radiance += min(nee_contrib, vec3(5.0));
                         }
                         prev_did_nee = true;
                     }

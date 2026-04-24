@@ -451,8 +451,7 @@ impl ApplicationHandler for App {
         let height = 1280.0;
 
         let attributes = Window::default_attributes()
-            .with_inner_size(LogicalSize::new(width, height))
-            .with_title("My Cool Renderer"); // Bonus: You can chain other settings here!
+            .with_inner_size(LogicalSize::new(width, height));
 
         let window = event_loop.create_window(attributes).unwrap();
         let window_size = window.inner_size().into();

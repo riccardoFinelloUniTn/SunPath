@@ -243,10 +243,26 @@ void main() {
 
         // Temporal Reuse
         if (frame_count > 0 && prev_valid) {
-            ivec2 prev_coord = ivec2(prev_uv * vec2(gl_LaunchSizeEXT.xy));
+            // Stochastic nearest-neighbor reprojection: jitter by [-0.5, 0.5] before
+            // truncating to integer pixel coords. Without the jitter, a deterministic
+            // truncation of a smoothly-varying prev_uv produces 1-pixel-wide stripes
+            // where adjacent columns/rows of pixels all snap to the same history
+            // reservoir — visible as "bands going in the motion direction" during
+            // slow lateral camera motion on dimly-lit uniform surfaces (where nothing
+            // masks the aliasing). The jitter decorrelates the snap per pixel so the
+            // banding becomes uncorrelated high-frequency noise that averages out.
+            vec2 prev_pixel_f = prev_uv * vec2(gl_LaunchSizeEXT.xy);
+            vec2 di_jitter    = vec2(rnd(), rnd()) - 0.5;
+            ivec2 prev_coord  = ivec2(prev_pixel_f + di_jitter);
             if (prev_coord.x >= 0 && prev_coord.y >= 0 && prev_coord.x < gl_LaunchSizeEXT.x && prev_coord.y < gl_LaunchSizeEXT.y) {
                 Reservoir history_r = read_history_reservoir(prev_coord);
                 history_r.M = min(history_r.M, 10.0);
+                // Clamp history W on read — a spike from a previous frame (borderline visibility,
+                // tiny p_hat_winner) otherwise gets amplified by M=10 in merge_reservoirs' weight
+                // = p_hat * W * M, then wins the merge, then gets re-baked into the current W.
+                // Bounding W per-hop turns a propagating spike into a bounded contribution that
+                // fades instead of riding the motion vector for 10 frames.
+                history_r.W = min(history_r.W, 20.0);
 
                 // Soft geometry confidence (same structure as the GI path below).
                 // Using a smoothstep ramp instead of a boolean gate does two things:
@@ -365,6 +381,20 @@ void main() {
             }
         }
 
+        // Firefly suppression: clamp per-channel radiance at x2 before it enters the reservoir.
+        // The two spike sources for the "uniform surface + distant light" case are:
+        //   (a) the cosine-weighted GI bounce happens to hit the light directly
+        //       (prd.emission at x2 = huge), with probability ~ solid_angle_of_light / pi.
+        //   (b) NEE at x2 grazes the light (nee_cos_light ~ 0 -> nee_pdf_sa small ->
+        //       division explodes, even though the underlying radiance is modest).
+        // Without a clamp, a single sample like that gets written to the GI reservoir and
+        // kept alive by temporal reuse for up to M=20 frames, which reads as a persistent
+        // bright pixel on an otherwise clean surface. Clamping at ~5 (well above direct
+        // diffuse albedo*cosθ/π for any physically-plausible unoccluded light) kills the
+        // spikes while leaving legitimate bright indirect (metal bounces, caustics) alone.
+        const float GI_RADIANCE_CLAMP = 5.0;
+        sample_radiance = min(sample_radiance, vec3(GI_RADIANCE_CLAMP));
+
         // Target function p_hat = luminance of the indirect contribution (diffuse lobe only at x1,
         // since specular indirect is handled by the final pass's BRDF-sampled bounce).
         float p_hat = gi_target_pdf(hitPos, hit_normal, hit_albedo, metallic, sample_pos, sample_radiance);
@@ -383,7 +413,14 @@ void main() {
 
 
     if (frame_count > 0 && prev_valid) {
-        ivec2 prev_coord_gi = ivec2(prev_uv * vec2(gl_LaunchSizeEXT.xy));
+        // Same stochastic nearest-neighbor jitter as the DI path above — see comment there.
+        // Using a fresh pair of rnd() draws so the GI jitter is uncorrelated with the DI
+        // jitter; that's important because GI temporal aliasing manifests most visibly on
+        // the same dimly-lit uniform surfaces as DI and correlated jitter would just shift
+        // the banding rather than break it.
+        vec2 prev_pixel_f_gi = prev_uv * vec2(gl_LaunchSizeEXT.xy);
+        vec2 gi_jitter       = vec2(rnd(), rnd()) - 0.5;
+        ivec2 prev_coord_gi  = ivec2(prev_pixel_f_gi + gi_jitter);
         if (prev_coord_gi.x >= 0 && prev_coord_gi.y >= 0 && prev_coord_gi.x < gl_LaunchSizeEXT.x && prev_coord_gi.y < gl_LaunchSizeEXT.y) {
             ReservoirGI history_gi = read_history_gi_reservoir(prev_coord_gi);
 
@@ -407,9 +444,17 @@ void main() {
             float depth_conf  = 1.0 - smoothstep(0.05, 0.20, depth_diff);
             float conf        = normal_conf * depth_conf;
 
-            // Cap + confidence-weight history M. At conf=1 we allow full 20-sample memory;
-            // at conf=0 we contribute zero weight (equivalent to the old hard reject).
-            history_gi.M = min(history_gi.M, 20.0) * conf;
+            // Cap + confidence-weight history M. Reduced from 20 to 12 specifically to break
+            // the motion-time firefly comet trail: at 20, a spike reservoir persists across ~20
+            // reprojections, and because reprojection uses stochastic nearest-neighbor jitter,
+            // each frame it lands on a slightly different pixel → visible smear in the motion
+            // direction. 12 is still enough memory for noise suppression on static pixels but
+            // short enough that a firefly fades within a few frames of motion.
+            history_gi.M = min(history_gi.M, 12.0) * conf;
+            // Clamp history W on read, same rationale as the DI path above: bound per-hop
+            // contribution of a potentially-spiky history reservoir so it can't amplify through
+            // the merge weight = p_hat * W * M * jacobian and dominate the output.
+            history_gi.W = min(history_gi.W, 10.0);
 
             if (history_gi.W > 0.0 && history_gi.M > 0.0) {
                 float p_hat_hist = gi_target_pdf(hitPos, hit_normal, hit_albedo, metallic, history_gi.sample_pos, history_gi.sample_radiance);
