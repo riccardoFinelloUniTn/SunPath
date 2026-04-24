@@ -383,7 +383,7 @@ void main() {
     vec2 mv = imageLoad(motion_vector_image, pixel_coord).rg;
 
 
-    //imageStore(raw_color_image, ivec2(gl_LaunchIDEXT.xy), vec4(current_frame_color, 1.0));
+    imageStore(raw_color_image, ivec2(gl_LaunchIDEXT.xy), vec4(current_frame_color, 1.0));
     //ReservoirGI vis = read_current_gi_reservoir(pixel_coord);
     //imageStore(raw_color_image, ivec2(gl_LaunchIDEXT.xy), vec4(clamp(vis.W, 0.0, 1.0), clamp(vis.M / 20.0, 0.0, 1.0), 0.0, 1.0));
 

@@ -196,25 +196,6 @@ void main() {
         imageStore(normal_image, pixel_coord, vec4(0.0));
         imageStore(diffuse_image, pixel_coord, vec4(0.0));
         imageStore(motion_vector_image, pixel_coord, vec4(sky_motion, 0.0, 0.0));
-
-        //TODO remove this as it turns the sky black. Used for debugging
-        vec2 mv_dbg = inUV - prev_uv;
-        vec3 col;
-        if (!prev_valid) {
-            // which gate failed?
-            if (sky_prev_clip.w <= MIN_SKY_W) {
-                col = vec3(1.0, 0.0, 0.0);   // RED = w-gate failed
-            } else {
-                col = vec3(0.0, 0.0, 1.0);   // BLUE = UV-gate failed (off-screen last frame)
-            }
-        } else {
-            col = vec3(0.0, abs(mv_dbg.x) * float(gl_LaunchSizeEXT.x) * 0.05,
-            abs(mv_dbg.y) * float(gl_LaunchSizeEXT.y) * 0.05);
-            // GREEN channels = actual motion magnitude, scaled as before
-        }
-        imageStore(raw_color_image, pixel_coord, vec4(col, 1.0));
-
-
         write_current_reservoir(pixel_coord, Reservoir(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0));
         write_current_gi_reservoir(pixel_coord, ReservoirGI(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0));
         return;
@@ -267,16 +248,36 @@ void main() {
                 Reservoir history_r = read_history_reservoir(prev_coord);
                 history_r.M = min(history_r.M, 10.0);
 
-                // Geometry rejection: normal + depth similarity
+                // Soft geometry confidence (same structure as the GI path below).
+                // Using a smoothstep ramp instead of a boolean gate does two things:
+                //   1. Eliminates banding at the accept/reject contour — critical near
+                //      depth discontinuities and normal transitions, where a hard gate
+                //      produces a visible edge between temporally-accumulated pixels
+                //      and single-sample pixels.
+                //   2. Degrades gracefully under dolly motion. A forward step that
+                //      changes a floor pixel's depth by 10% no longer throws away
+                //      the entire history; it just reduces M proportionally, so the
+                //      reservoir keeps stabilising over frames instead of resetting.
+                //
+                // Normal ramp (0.9, 0.99): accepts glancing parallax on flat surfaces.
+                // Depth ramp (0.05, 0.20): the upper bound tolerates virtual-image
+                // depth changes from reflections (which move ~2x faster than the camera)
+                // and aggressive dollies at close range.
                 vec3 hist_normal = unpack_normal(history_r.hit_normal_packed);
-                bool geom_ok = dot(hit_normal, hist_normal) > 0.99
-                            && abs(virtual_distance - history_r.depth) < 0.01 * virtual_distance;
+                float normal_conf_di = smoothstep(0.9, 0.99, dot(hit_normal, hist_normal));
+                float depth_diff_di  = abs(virtual_distance - history_r.depth) / max(virtual_distance, 1e-4);
+                float depth_conf_di  = 1.0 - smoothstep(0.05, 0.20, depth_diff_di);
+                float conf_di        = normal_conf_di * depth_conf_di;
+
+                // Confidence-weight history M. conf=1 -> full memory (capped at 10),
+                // conf=0 -> zero contribution, equivalent to the old hard reject.
+                history_r.M *= conf_di;
 
                 // Light index validity (light count may have changed)
                 bool idx_ok = history_r.light_idx < num_lights;
 
 
-                if (history_r.W > 0.0 && geom_ok && idx_ok) {
+                if (history_r.W > 0.0 && history_r.M > 0.0 && idx_ok) {
                     emissive_triangle_t hist_light = emissive_triangles[history_r.light_idx];
                     vec3 f_y_hist = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, hist_light, history_r.light_pos, history_r.light_normal);
                     float p_hat_hist = max(f_y_hist.r, max(f_y_hist.g, f_y_hist.b));
@@ -396,7 +397,14 @@ void main() {
             vec3 gi_hist_normal = unpack_normal(history_gi.hit_normal_packed);
             float normal_conf = smoothstep(0.8, 0.95, dot(hit_normal, gi_hist_normal));
             float depth_diff  = abs(virtual_distance - history_gi.depth) / max(virtual_distance, 1e-4);
-            float depth_conf  = 1.0 - smoothstep(0.05, 0.12, depth_diff);
+            // Depth tolerance widened from (0.05, 0.12) to (0.05, 0.20) specifically for
+            // forward/backward (dolly) motion: the old upper bound of 12% relative depth
+            // change was tripped by modest forward steps on floors at glancing angles and
+            // by any appreciable camera motion when the shading point is a reflection
+            // (virtual-image depth changes ~2x the camera translation). The new 20% upper
+            // bound keeps GI reservoirs alive through normal navigation speeds while the
+            // 5% lower bound preserves responsiveness for actual geometry changes.
+            float depth_conf  = 1.0 - smoothstep(0.05, 0.20, depth_diff);
             float conf        = normal_conf * depth_conf;
 
             // Cap + confidence-weight history M. At conf=1 we allow full 20-sample memory;

@@ -749,6 +749,27 @@ impl Renderer {
     }
 
     pub fn set_camera(&mut self, camera: crate::Camera) -> SrResult<()> {
+        // CRITICAL: the matrices UBO is HOST_COHERENT mapped memory. The ray-tracing
+        // shader reads `view_proj` / `prev_view_proj` from this same backing memory
+        // across its entire dispatch, and `render_to_image` returns to the caller
+        // BEFORE the GPU has finished that dispatch (it only waits for idle at the
+        // START of the next render call). If we write to the UBO here while the
+        // previous frame's RT is still running, the shader sees a TORN matrix —
+        // some invocations read the old 256 bytes, some read the new ones, split
+        // along wave/tile boundaries. Under camera motion that reads back as
+        // blocky per-wave artifacts, most visible at silhouettes where the
+        // MIN_PREV_W gate hovers on the edge and tiny matrix perturbations flip
+        // individual pixels across it. A static camera is immune because the
+        // "new" bytes are identical to the "old" bytes.
+        //
+        // Waiting for device idle here serializes the UBO update against any
+        // in-flight GPU work. Minimum viable fix — the proper long-term fix is
+        // per-frame UBOs (double/triple buffering) so we never overwrite bytes
+        // a running frame might still read.
+        unsafe {
+            self.core.device().inner().device_wait_idle().unwrap();
+        }
+
         let mut matrices = camera.as_matrices(self.image_extent);
 
         // Inject the history matrix saved from the last frame
