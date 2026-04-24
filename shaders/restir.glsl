@@ -75,7 +75,7 @@ float gi_target_pdf(vec3 shade_pos, vec3 shade_normal, vec3 albedo, float metall
 }
 
 // GI reservoir merge. The jacobian term corrects the geometric change when a sample is reused
-// from a neighboring pixel's shading point (see Ouyang 2021, eq. 11). For temporal reuse the
+// from a neighboring pixel's shading point. For temporal reuse the
 // shading point is unchanged, so callers pass jacobian = 1.0.
 void merge_reservoirs_gi(inout ReservoirGI r, ReservoirGI new_r, float p_hat_new, float jacobian, float random_val) {
     r.M += new_r.M;

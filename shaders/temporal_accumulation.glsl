@@ -57,7 +57,8 @@ void main() {
             vec3 neighbor_color = tile_color[tile_pos.y * TILE_FULL + tile_pos.x];
 
             float neighbor_luma = get_luminance(neighbor_color);
-            if (abs(neighbor_luma - center_luma) < max(center_luma * 5.0, 0.5)) {
+            float luma_threshold = max(center_luma * 5.0, 0.08);
+            if (abs(neighbor_luma - center_luma) < luma_threshold) {
                 min_color = min(min_color, neighbor_color);
                 max_color = max(max_color, neighbor_color);
             }

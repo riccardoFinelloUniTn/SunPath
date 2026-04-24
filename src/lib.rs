@@ -20,7 +20,7 @@ use crate::vulkan_abstraction::{
     TemporalPass,
 };
 
-pub const DENOISE_PASSES: u32 = 8;
+pub const DENOISE_PASSES: u32 = 4;
 
 pub const EXPOSURE: f32 = 1.0;
 
@@ -749,18 +749,7 @@ impl Renderer {
     }
 
     pub fn set_camera(&mut self, camera: crate::Camera) -> SrResult<()> {
-        // CRITICAL: the matrices UBO is HOST_COHERENT mapped memory. The ray-tracing
-        // shader reads `view_proj` / `prev_view_proj` from this same backing memory
-        // across its entire dispatch, and `render_to_image` returns to the caller
-        // BEFORE the GPU has finished that dispatch (it only waits for idle at the
-        // START of the next render call). If we write to the UBO here while the
-        // previous frame's RT is still running, the shader sees a TORN matrix —
-        // some invocations read the old 256 bytes, some read the new ones, split
-        // along wave/tile boundaries. Under camera motion that reads back as
-        // blocky per-wave artifacts, most visible at silhouettes where the
-        // MIN_PREV_W gate hovers on the edge and tiny matrix perturbations flip
-        // individual pixels across it. A static camera is immune because the
-        // "new" bytes are identical to the "old" bytes.
+        //TODO
         //
         // Waiting for device idle here serializes the UBO update against any
         // in-flight GPU work. Minimum viable fix — the proper long-term fix is
