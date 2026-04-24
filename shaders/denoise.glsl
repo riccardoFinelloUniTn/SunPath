@@ -84,7 +84,7 @@ void main() {
             float luma_sigma = max(center_luma, sample_luma) * 0.4 + 0.01;
             float luma_ratio = luma_diff / luma_sigma;
 
-            // Squared luma penalty 
+            // Squared luma penalty
             float combined_power =
             -abs(center_depth - sample_depth) * DEPTH_SENSITIVITY
             + (dot(center_normal, sample_normal) - 1.0) * NORMAL_SENSITIVITY

@@ -120,17 +120,9 @@ void main() {
         }
         // Diffuse Object Hit
         else {
-            // virtual_world_pos: point at virtual_distance along the primary ray. For the typical
-            // direct-diffuse hit this equals hitPos; for mirror-chain-then-diffuse hits it's the
-            // virtual image location, which matches the depth we store in the reservoir so the
-            // temporal geometry check is consistent.
             vec3 virtual_world_pos = origin.xyz + direction.xyz * virtual_distance;
             vec4 prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(virtual_world_pos, 1.0);
 
-            // Require a safely-in-front-of-previous-camera w (not just >0) so that near-plane
-            // grazing points can't blow prev_ndc up to arbitrary values. Very small positive w
-            // produced a row-dependent band of garbage prev_uv that the in-bounds UV check alone
-            // wouldn't catch reliably.
             const float MIN_PREV_W = 0.01;
             prev_valid = prev_clip.w > MIN_PREV_W;
             if (prev_valid) {
@@ -138,10 +130,7 @@ void main() {
                 prev_uv = vec2(prev_ndc.x, prev_ndc.y) * 0.5 + 0.5;
                 prev_valid = all(greaterThanEqual(prev_uv, vec2(0.0))) && all(lessThan(prev_uv, vec2(1.0)));
             }
-            // Canonical out-of-range motion vector when reprojection is invalid: guarantees
-            // TAA / DI / GI history reads all reject this pixel instead of reading a random
-            // in-bounds neighbour row (was the mechanism behind the horizontal-band ghosting
-            // visible at high resolutions).
+
             vec2 motion_vector = prev_valid ? (inUV - prev_uv) : (inUV + vec2(2.0));
             vec3 denoiser_albedo = mix(hit_albedo, vec3(1.0), metallic);
 
@@ -150,39 +139,15 @@ void main() {
             imageStore(diffuse_image, pixel_coord, vec4(denoiser_albedo, 0.0));
             imageStore(motion_vector_image, pixel_coord, vec4(motion_vector, 0.0, 0.0));
 
-            vec2 mv_dbg = inUV - prev_uv;
-            vec3 col;
-            if (!prev_valid) {
-                // which gate failed?
-                if (prev_clip.w <= MIN_PREV_W) {
-                    col = vec3(1.0, 0.0, 0.0);   // RED = w-gate failed
-                } else {
-                    col = vec3(0.0, 0.0, 1.0);   // BLUE = UV-gate failed (off-screen last frame)
-                }
-            } else {
-                col = vec3(0.0, abs(mv_dbg.x) * float(gl_LaunchSizeEXT.x) * 0.05,
-                abs(mv_dbg.y) * float(gl_LaunchSizeEXT.y) * 0.05);
-
-                col = vec3(0.1,0.1,0);
-                // GREEN channels = actual motion magnitude, scaled as before
-            }
-            imageStore(raw_color_image, pixel_coord, vec4(col, 1.0));
-
             found_diffuse_surface = true;
             break;
         }
     }
 
     if (!found_diffuse_surface) {
-        // Sky motion vector: project the final ray direction (post mirror/glass bounces) through
-        // prev_view_proj with w=0, which is the standard trick for points at infinity. Writing a
-        // plain vec4(0.0) here made TAA think the sky was static and ghosted the horizon during
-        // camera rotation — very visible at the top of the screen in high-res scenes.
         vec2 sky_motion = inUV + vec2(2.0); // default: guaranteed out-of-range, rejected by TAA
         vec4 sky_prev_clip = matrices_uniform_buffer.prev_view_proj * vec4(rayDir, 0.0);
-        // Same small-w guard as the diffuse path: directions that point near-perpendicular to the
-        // previous camera forward axis produce tiny positive w and therefore explosive NDC, which
-        // shows up as a row of bogus sky motion vectors at the horizon.
+
         const float MIN_SKY_W = 0.01;
         if (sky_prev_clip.w > MIN_SKY_W) {
             vec2 sky_prev_ndc = sky_prev_clip.xy / sky_prev_clip.w;
@@ -243,42 +208,15 @@ void main() {
 
         // Temporal Reuse
         if (frame_count > 0 && prev_valid) {
-            // Stochastic nearest-neighbor reprojection: jitter by [-0.5, 0.5] before
-            // truncating to integer pixel coords. Without the jitter, a deterministic
-            // truncation of a smoothly-varying prev_uv produces 1-pixel-wide stripes
-            // where adjacent columns/rows of pixels all snap to the same history
-            // reservoir — visible as "bands going in the motion direction" during
-            // slow lateral camera motion on dimly-lit uniform surfaces (where nothing
-            // masks the aliasing). The jitter decorrelates the snap per pixel so the
-            // banding becomes uncorrelated high-frequency noise that averages out.
+
             vec2 prev_pixel_f = prev_uv * vec2(gl_LaunchSizeEXT.xy);
             vec2 di_jitter    = vec2(rnd(), rnd()) - 0.5;
             ivec2 prev_coord  = ivec2(prev_pixel_f + di_jitter);
             if (prev_coord.x >= 0 && prev_coord.y >= 0 && prev_coord.x < gl_LaunchSizeEXT.x && prev_coord.y < gl_LaunchSizeEXT.y) {
                 Reservoir history_r = read_history_reservoir(prev_coord);
                 history_r.M = min(history_r.M, 10.0);
-                // Clamp history W on read — a spike from a previous frame (borderline visibility,
-                // tiny p_hat_winner) otherwise gets amplified by M=10 in merge_reservoirs' weight
-                // = p_hat * W * M, then wins the merge, then gets re-baked into the current W.
-                // Bounding W per-hop turns a propagating spike into a bounded contribution that
-                // fades instead of riding the motion vector for 10 frames.
                 history_r.W = min(history_r.W, 20.0);
 
-                // Soft geometry confidence (same structure as the GI path below).
-                // Using a smoothstep ramp instead of a boolean gate does two things:
-                //   1. Eliminates banding at the accept/reject contour — critical near
-                //      depth discontinuities and normal transitions, where a hard gate
-                //      produces a visible edge between temporally-accumulated pixels
-                //      and single-sample pixels.
-                //   2. Degrades gracefully under dolly motion. A forward step that
-                //      changes a floor pixel's depth by 10% no longer throws away
-                //      the entire history; it just reduces M proportionally, so the
-                //      reservoir keeps stabilising over frames instead of resetting.
-                //
-                // Normal ramp (0.9, 0.99): accepts glancing parallax on flat surfaces.
-                // Depth ramp (0.05, 0.20): the upper bound tolerates virtual-image
-                // depth changes from reflections (which move ~2x faster than the camera)
-                // and aggressive dollies at close range.
                 vec3 hist_normal = unpack_normal(history_r.hit_normal_packed);
                 float normal_conf_di = smoothstep(0.9, 0.99, dot(hit_normal, hist_normal));
                 float depth_diff_di  = abs(virtual_distance - history_r.depth) / max(virtual_distance, 1e-4);
@@ -366,7 +304,12 @@ void main() {
                 float nee_cos_light = max(dot(nee_normal, -to_light), 0.0);
 
                 if (nee_cos_surf > 0.0 && nee_cos_light > 0.0) {
-                    uint nee_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT;
+                    // No gl_RayFlagsOpaqueEXT: the any-hit shader must run so that alpha-cutout
+                    // geometry can ignoreIntersectionEXT below its alpha_cutoff. Forcing opaque
+                    // here was the root cause of the "alpha-masked leaves cast real shadows
+                    // through GI" artifact — this NEE at x2 is exactly the path that feeds
+                    // indirect-bounce-then-light shadowing into the GI reservoir.
+                    uint nee_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT;
                     prd.dist = 1.0;
                     traceRayEXT(tlas, nee_flags, 0xFF, 0, 0, 0, sample_pos + sample_normal * 0.001, 0.001, to_light, nee_dist - 0.001, 0);
 

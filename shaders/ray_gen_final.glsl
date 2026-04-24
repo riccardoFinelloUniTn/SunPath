@@ -159,12 +159,6 @@ void main() {
                         if (abs(current_depth - neighbor_depth) > 0.1 * current_depth) continue;
 
                         Reservoir neighbor_r = read_current_reservoir(neighbor_coord);
-                        // Clamp W and M on read so a single spiky neighbor (e.g. a firefly that
-                        // survived the per-hop clamps in the RIS pass) can't dominate the
-                        // spatial merge weight = p_hat * W * M. Without these clamps a neighbor
-                        // with W=50, M=10 contributes 500x a normal neighbor's weight and paints
-                        // its light choice across the entire 30-pixel spatial radius in one pass
-                        // — which is exactly how a 1-pixel firefly becomes a 5-10 pixel splotch.
                         neighbor_r.W = min(neighbor_r.W, 20.0);
                         neighbor_r.M = min(neighbor_r.M, 10.0);
                         if (neighbor_r.W > 0.0 && neighbor_r.light_idx < num_lights) {
@@ -179,15 +173,7 @@ void main() {
                         emissive_triangle_t winner = emissive_triangles[spatial_r.light_idx];
                         vec3 f_y_winner = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, winner, spatial_r.light_pos, spatial_r.light_normal);
                         float p_hat_winner = max(f_y_winner.r, max(f_y_winner.g, f_y_winner.b));
-                        // Raise p_hat floor from 1e-4 to 1e-3 so a borderline-visible light can't
-                        // produce a spatial W of ~1e4. With M*p_hat capped at 1e-3, W is bounded
-                        // by w_sum*1000, and we additionally clamp W itself below as a backstop.
                         spatial_r.W = spatial_r.w_sum / max(spatial_r.M * p_hat_winner, 1e-3);
-                        // Firefly backstop on ReSTIR DI reuse: the "correct" unbiased W can still
-                        // be very large when p_hat_winner is small (grazing angle, near-silhouette
-                        // temporal history) even though the scene radiance is bounded. A per-sample
-                        // cap at 50 preserves all plausible direct shading on diffuse surfaces
-                        // while preventing single-pixel spikes from propagating through TAA.
                         spatial_r.W = min(spatial_r.W, 50.0);
 
                         vec3 shadow_dir = spatial_r.light_pos - hitPos;
@@ -206,17 +192,9 @@ void main() {
                         }
                     }
 
-                    // --- ReSTIR GI: Stage 5 spatial reuse + visibility reconnection (Ouyang 2021) ---
-                    // Start from the temporal reservoir at this pixel and merge K neighbor
-                    // reservoirs, correcting each for the geometric change in solid angle from
-                    // neighbor's x1 to our x1 (Jacobian, eq. 11). Per-candidate visibility test
-                    // rejects neighbors whose x2 isn't actually visible from us, which is what
-                    // closes the disocclusion stripes along silhouettes: disoccluded pixels keep
-                    // a degenerate temporal reservoir (W≈0 because reconnection geometry failed),
-                    // and spatial neighbors provide the indirect they can't sample themselves.
-                    //
-                    // `combined` is local — never written back to the reservoir buffer — to avoid
-                    // compounding spatial reuse across frames and blurring indirect detail.
+                    //ReSTIR GI
+
+
                     ReservoirGI combined = read_current_gi_reservoir(pixel_coord);
 
                     const int   GI_SPATIAL_SAMPLES = 3;
@@ -240,20 +218,10 @@ void main() {
 
                         ReservoirGI neighbor_r = read_current_gi_reservoir(nc);
                         if (neighbor_r.W <= 0.0) continue;
-                        // Clamp neighbor W and M on read — same rationale as DI spatial reuse
-                        // above. Without these, one spiky GI reservoir in the 20-pixel radius
-                        // wins every merge it enters, and since the spatial merge here replaces
-                        // `combined.sample_pos / sample_radiance` with the neighbor's, the spike
-                        // paints the splotch. Capping both reduces the neighbor's merge weight
-                        // = p_hat * W * M * jacobian so it competes fairly instead of dominating.
+
                         neighbor_r.W = min(neighbor_r.W, 10.0);
                         neighbor_r.M = min(neighbor_r.M, 10.0);
 
-                        // Reconstruct neighbor_x1 from its primary ray and stored virtual_distance.
-                        // The cached depth is the virtual distance through any mirror chain, so
-                        // origin + primary_dir * depth gives the virtual-image shading point the
-                        // reservoir was written against. For plain diffuse pixels this is the
-                        // real hit.
                         vec2 npc = vec2(nc) + vec2(0.5);
                         vec2 nUV = npc / vec2(gl_LaunchSizeEXT.xy);
                         vec2 nd  = nUV * 2.0 - 1.0;
@@ -261,9 +229,6 @@ void main() {
                         vec4 ndir = matrices_uniform_buffer.view_inverse * vec4(normalize(nt.xyz), 0);
                         vec3 neighbor_x1 = origin.xyz + ndir.xyz * neighbor_depth;
 
-                        // Ouyang 2021 eq. 11: J = (cos(phi_new) * d_old^2) / (cos(phi_old) * d_new^2)
-                        // where phi is the angle at x2 between the surface normal there and the
-                        // incoming connection direction, and d is the length of the connection.
                         vec3  w_new = neighbor_r.sample_pos - hitPos;
                         vec3  w_old = neighbor_r.sample_pos - neighbor_x1;
                         float d_new = max(length(w_new), 1e-4);
@@ -279,7 +244,7 @@ void main() {
                         // Per-candidate visibility: reject if x2 not visible from our x1.
                         vec3 gi_spatial_dir = w_new / d_new;
                         if (dot(hit_normal, gi_spatial_dir) <= 0.0) continue;
-                        uint gi_spatial_vis = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT;
+                        uint gi_spatial_vis = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT;
                         prd.dist = 1.0;
                         traceRayEXT(tlas, gi_spatial_vis, 0xFF, 0, 0, 0, hitPos, 0.001, gi_spatial_dir, d_new - 0.001, 0);
                         if (prd.dist >= 0.0) continue; // occluded — don't bleed energy across silhouettes
@@ -288,23 +253,10 @@ void main() {
                         merge_reservoirs_gi(combined, neighbor_r, p_hat_neighbor, jacobian, rnd());
                     }
 
-                    // Final W from the selected sample under our target pdf.
-                    // Epsilon raised from 1e-6 to 1e-3: at 1e-6, a single accumulated frame with
-                    // any non-trivial w_sum produces W ~ 1e6, which even with the min(total, 10)
-                    // clamp at the end of main() gets written with a visible 2-pixel bright speck
-                    // after TAA neighborhood clipping. 1e-3 still admits essentially all real
-                    // indirect contributions (since p_hat = luminance of albedo/π · NdotL · L).
                     float p_hat_final = gi_target_pdf(hitPos, hit_normal, hit_albedo, metallic, combined.sample_pos, combined.sample_radiance);
                     combined.W = (p_hat_final > 1e-3) ? (combined.w_sum / max(combined.M, 1.0) / p_hat_final) : 0.0;
-                    // Firefly backstop on ReSTIR GI reuse: bound W for the same reason as DI
-                    // above. Cap lower than DI because GI indirect is energetically dimmer —
-                    // a GI sample contributing >20x direct is a numerical artifact, not real.
                     combined.W = min(combined.W, 20.0);
 
-                    // Shade with `combined`. One more visibility ray is required: the selected
-                    // sample might be the temporal center (not tested above) or might have slid
-                    // behind an occluder since the per-candidate test. We already proved
-                    // visibility for spatial candidates so for them this is a re-check; cheap.
                     if (combined.W > 0.0) {
                         vec3 gi_x2_dir = combined.sample_pos - hitPos;
                         float gi_x2_dist = max(length(gi_x2_dir), 0.0001);
@@ -312,7 +264,11 @@ void main() {
 
                         float gi_NdotL = max(dot(hit_normal, gi_x2_dir), 0.0);
                         if (gi_NdotL > 0.0) {
-                            uint gi_final_vis = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT;
+                            // Same any-hit consideration as GI spatial visibility above: drop
+                            // gl_RayFlagsOpaqueEXT so alpha-cutout geometry is treated as
+                            // transparent by the any-hit shader instead of casting a false
+                            // hard shadow on the GI final-visibility shadow ray.
+                            uint gi_final_vis = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT;
                             prd.dist = 1.0;
                             traceRayEXT(tlas, gi_final_vis, 0xFF, 0, 0, 0, hitPos, 0.001, gi_x2_dir, gi_x2_dist - 0.001, 0);
 
@@ -347,19 +303,14 @@ void main() {
                     float cos_theta_surface = max(dot(hit_normal, shadow_ray_dir), 0.0);
 
                     if (cos_theta_light > 0.0 && cos_theta_surface > 0.0) {
-                        uint shadow_ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT;
+                        // No gl_RayFlagsOpaqueEXT: alpha-tested geometry must be able to
+                        // reject intersections via any_hit.glsl instead of being forced opaque.
+                        uint shadow_ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT;
                         prd.dist = 1.0;
                         traceRayEXT(tlas, shadow_ray_flags, 0xFF, 0, 0, 0, hitPos, 0.001, shadow_ray_dir, light_dist - 0.001, 0);
 
                         if (prd.dist < 0.0) {
                             float light_area = light.v0_area.w;
-                            // Floor on cos_theta_light prevents grazing configurations from
-                            // producing tiny solid_angle_pdf → exploding contribution. Without
-                            // this, NEE at a rough indirect bounce is the largest firefly source
-                            // in scenes with one distant light, because whenever the second-bounce
-                            // surface happens to face the light at a shallow angle, the /pdf
-                            // divide produces a single-sample spike that only gets averaged down
-                            // by full-image accumulation (which we don't do here — 1 spp + TAA).
                             float solid_angle_pdf = (light_dist * light_dist) / max(cos_theta_light * light_area * float(num_lights), 1e-4);
                             vec3 nee_contrib = (light.emission.rgb * hit_albedo * throughput * cos_theta_surface) / (solid_angle_pdf * 3.14159);
                             radiance += min(nee_contrib, vec3(5.0));
