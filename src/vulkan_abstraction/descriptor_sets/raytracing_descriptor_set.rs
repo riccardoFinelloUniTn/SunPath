@@ -24,8 +24,9 @@ impl RaytracingDescriptorSetLayout {
     pub const BLUE_NOISE_BINDING: u32 = 10;
     pub const EMISSIVE_INDIRECTION_BINDING: u32 = 11;
     pub const ENTITY_TRANSFORMS_BINDING: u32 = 12;
-    pub const RESERVOIR_BUFFER_A_BINDING: u32 = 13;
-    pub const RESERVOIR_BUFFER_B_BINDING: u32 = 14;
+    pub const RESERVOIR_BUFFERS_BINDING: u32 = 13;
+    pub const RESERVOIR_GI_BUFFERS_BINDING: u32 = 14;
+    pub const NUMBER_OF_BINDINGS: usize = 15;
 
     pub const NUMBER_OF_SAMPLERS: u32 = vulkan_abstraction::ResourceManager::NUMBER_OF_SAMPLERS as u32;
 
@@ -109,17 +110,18 @@ impl RaytracingDescriptorSetLayout {
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
-            //ping pong buffers for ReSTIR
+            //ping pong buffers for ReSTIR, accessed as reservoirs[frame_parity] on the shader side
             vk::DescriptorSetLayoutBinding::default()
-                .binding(Self::RESERVOIR_BUFFER_A_BINDING)
+                .binding(Self::RESERVOIR_BUFFERS_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::RAYGEN_KHR),
+                .descriptor_count(2)
+                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+            //ping pong buffers for ReSTIR GI, accessed as reservoirs_gi[frame_parity] on the shader side
             vk::DescriptorSetLayoutBinding::default()
-                .binding(Self::RESERVOIR_BUFFER_B_BINDING)
+                .binding(Self::RESERVOIR_GI_BUFFERS_BINDING)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1)
-                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR | vk::ShaderStageFlags::RAYGEN_KHR),
+                .descriptor_count(2)
+                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
         ];
 
         let descriptor_set_layout_create_info =
@@ -168,6 +170,7 @@ impl RaytracingDescriptorSets {
         blue_noise_image: &vulkan_abstraction::Image,
         blue_noise_sampler: vk::Sampler,
         reservoir_buffers: &[vulkan_abstraction::GpuOnlyBuffer; 2],
+        reservoir_gi_buffers: &[vulkan_abstraction::GpuOnlyBuffer; 2],
         shader_data: &vulkan_abstraction::ResourceManager,
     ) -> SrResult<Self> {
         let device = core.device().inner();
@@ -182,8 +185,8 @@ impl RaytracingDescriptorSets {
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(1),
             vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::STORAGE_BUFFER) //Meshes info + Emissive triangles + Indirection + Entity transforms + 2 ping pong Reservoir buffers
-                .descriptor_count(6),
+                .ty(vk::DescriptorType::STORAGE_BUFFER) //Meshes info + Emissive triangles+ Indirection + Entity transforms + 2 ping pong Reservoir buffers  + 2 ping pong GI Reservoir buffers
+                .descriptor_count(8),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS + 1), //The +1 is for the blue noise texture
@@ -376,26 +379,36 @@ impl RaytracingDescriptorSets {
                 .dst_binding(RaytracingDescriptorSetLayout::BLUE_NOISE_BINDING),
         );
 
-        let res_a_infos = [vk::DescriptorBufferInfo::default()
-            .buffer(reservoir_buffers[0].inner())
-            .range(vk::WHOLE_SIZE)];
+        let reservoir_infos = [
+            vk::DescriptorBufferInfo::default()
+                .buffer(reservoir_buffers[0].inner())
+                .range(vk::WHOLE_SIZE),
+            vk::DescriptorBufferInfo::default()
+                .buffer(reservoir_buffers[1].inner())
+                .range(vk::WHOLE_SIZE),
+        ];
         push_write(
             vk::WriteDescriptorSet::default()
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(&res_a_infos)
+                .buffer_info(&reservoir_infos)
                 .dst_set(descriptor_sets[0])
-                .dst_binding(RaytracingDescriptorSetLayout::RESERVOIR_BUFFER_A_BINDING),
+                .dst_binding(RaytracingDescriptorSetLayout::RESERVOIR_BUFFERS_BINDING),
         );
 
-        let res_b_infos = [vk::DescriptorBufferInfo::default()
-            .buffer(reservoir_buffers[1].inner())
-            .range(vk::WHOLE_SIZE)];
+        let reservoir_gi_infos = [
+            vk::DescriptorBufferInfo::default()
+                .buffer(reservoir_gi_buffers[0].inner())
+                .range(vk::WHOLE_SIZE),
+            vk::DescriptorBufferInfo::default()
+                .buffer(reservoir_gi_buffers[1].inner())
+                .range(vk::WHOLE_SIZE),
+        ];
         push_write(
             vk::WriteDescriptorSet::default()
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
-                .buffer_info(&res_b_infos)
+                .buffer_info(&reservoir_gi_infos)
                 .dst_set(descriptor_sets[0])
-                .dst_binding(RaytracingDescriptorSetLayout::RESERVOIR_BUFFER_B_BINDING),
+                .dst_binding(RaytracingDescriptorSetLayout::RESERVOIR_GI_BUFFERS_BINDING),
         );
 
         unsafe { device.update_descriptor_sets(&descriptor_writes, &[]) };

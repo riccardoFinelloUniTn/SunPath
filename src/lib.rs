@@ -11,13 +11,11 @@ pub use scene::*;
 use std::{collections::HashMap, rc::Rc};
 
 use ash::vk;
-use log::info;
+
 use crate::utils::env_var_as_bool;
 use crate::vulkan_abstraction::descriptor_sets::postprocess_descriptor_set::PostprocessDescriptorSetLayout;
 use crate::vulkan_abstraction::descriptor_sets::temporal_accumulation_descriptor_set::TemporalAccumulationDescriptorSetLayout;
-use crate::vulkan_abstraction::{
-    DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets, PostprocessPass, Reservoir, TemporalPass,
-};
+use crate::vulkan_abstraction::{DenoiseDescriptorSetLayout, DenoisePass, PostProcessDescriptorSets, PostprocessPass, Reservoir, ReservoirGI, TemporalPass};
 
 pub const DENOISE_PASSES: u32 = 8;
 
@@ -107,6 +105,9 @@ pub struct Renderer {
 
     prev_view_proj: nalgebra::Matrix4<f32>, //used to calculate motion vectors
     reservoir_buffers: [vulkan_abstraction::GpuOnlyBuffer; 2],
+    // Ping-pong pair of GI reservoir buffers for ReSTIR GI (Ouyang 2021); same lifetime/layout
+    // contract as reservoir_buffers above, but storing surface samples (x2) instead of light samples.
+    reservoir_gi_buffers: [vulkan_abstraction::GpuOnlyBuffer; 2],
 }
 
 impl Renderer {
@@ -222,6 +223,21 @@ impl Renderer {
         )?;
         let reservoir_buffers = [reservoir_buffer_a, reservoir_buffer_b];
 
+        let reservoir_gi_buffer_a = vulkan_abstraction::GpuOnlyBuffer::new::<ReservoirGI>(
+            Rc::clone(&core),
+            num_pixels  as vk::DeviceSize,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            "ReSTIR GI Reservoir Buffer A",
+        )?;
+
+        let reservoir_gi_buffer_b = vulkan_abstraction::GpuOnlyBuffer::new::<ReservoirGI>(
+            Rc::clone(&core),
+            num_pixels as vk::DeviceSize,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            "ReSTIR GI Reservoir Buffer B",
+        )?;
+        let reservoir_gi_buffers = [reservoir_gi_buffer_a, reservoir_gi_buffer_b];
+
         let blue_noise_bytes = include_bytes!("../src/util_files/noise.png");
         let blue_noise_img = image::load_from_memory(blue_noise_bytes).unwrap().to_rgba8();
         let (noise_width, noise_height) = blue_noise_img.dimensions();
@@ -285,6 +301,7 @@ impl Renderer {
                 blue_noise_sampler,
 
                 resource_manager,
+                reservoir_gi_buffers,
 
                 core,
             },
@@ -315,6 +332,22 @@ impl Renderer {
         )?;
 
         self.reservoir_buffers = [reservoir_buffer_a, reservoir_buffer_b];
+
+        let reservoir_gi_buffer_a = vulkan_abstraction::GpuOnlyBuffer::new::<ReservoirGI>(
+            self.core.clone(),
+            num_pixels  as vk::DeviceSize,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            "ReSTIR GI Reservoir Buffer A",
+        )?;
+
+        let reservoir_gi_buffer_b = vulkan_abstraction::GpuOnlyBuffer::new::<ReservoirGI>(
+            self.core.clone(),
+            num_pixels as vk::DeviceSize,
+            vk::BufferUsageFlags::STORAGE_BUFFER,
+            "ReSTIR GI Reservoir Buffer B",
+        )?;
+
+        self.reservoir_gi_buffers = [reservoir_gi_buffer_a, reservoir_gi_buffer_b];
 
         self.image_extent = new_extent;
 
@@ -541,6 +574,7 @@ impl Renderer {
                 &self.blue_noise_image,
                 self.blue_noise_sampler.inner(),
                 &self.reservoir_buffers,
+                &self.reservoir_gi_buffers,
                 &self.resource_manager,
             )?;
 
@@ -686,6 +720,16 @@ impl Renderer {
     }
 
     pub fn set_camera(&mut self, camera: crate::Camera) -> SrResult<()> {
+        //TODO
+        //
+        // Waiting for device idle here serializes the UBO update against any
+        // in-flight GPU work. Minimum viable fix — the proper long-term fix is
+        // per-frame UBOs (double/triple buffering) so we never overwrite bytes
+        // a running frame might still read.
+        unsafe {
+            self.core.device().inner().device_wait_idle().unwrap();
+        }
+
         let mut matrices = camera.as_matrices(self.image_extent);
 
         // Inject the history matrix saved from the last frame
@@ -1662,7 +1706,7 @@ const IS_DEBUG_BUILD: bool = cfg!(debug_assertions);
 
 impl Drop for Renderer {
     fn drop(&mut self) {
-        match self.core().graphics_queue().wait_idle() {
+        match self.core().queue().wait_idle() {
             Ok(()) => {}
             Err(e) => match e.get_source() {
                 ErrorSource::Vulkan(e) => {

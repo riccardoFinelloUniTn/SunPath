@@ -1,6 +1,10 @@
 #version 460
 
-layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+#define TILE_SIZE 16
+#define TILE_BORDER 1
+#define TILE_FULL (TILE_SIZE + 2 * TILE_BORDER) // 18
+
+layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE, local_size_z = 1) in;
 
 layout(push_constant) uniform PushConstants {
     uint frame_count;
@@ -11,47 +15,37 @@ layout(set = 0, binding = 1, rg16f)   uniform readonly image2D motion_vector_ima
 layout(set = 0, binding = 2, r11f_g11f_b10f) uniform image2D accumulation_images[2];
 layout(set = 0, binding = 3)          uniform sampler2D history_samplers[2];
 
-const float ACCUMULATION_FACTOR = 0.18;
-const float COLOR_THRESHOLD = 0.1;
+const float ACCUMULATION_FACTOR = 0.14;
 
-vec3 get_historical_color(uint history_idx, vec2 uv, vec3 current_color) {
-    if (pc.frame_count == 0) return current_color;
-    return texture(history_samplers[history_idx], uv).rgb;
-}
+// Shared tile for 3x3 neighborhood clamp. 256 threads cooperatively load 324 texels (~1.27/thread).
+// Reduces 9 texelFetch/pixel to ~1.27/pixel plus avoids L1 cache contention.
+shared vec3 tile_color[TILE_FULL * TILE_FULL];
 
 float get_luminance(vec3 color) {
     return dot(color, vec3(0.2126, 0.7152, 0.0722));
 }
 
-vec3 perform_temporal_accumulation(vec3 current_color, sampler2D history_sampler, vec2 uv, vec2 motion_vector, uint frame_count) {
-    vec2 prev_uv = uv - motion_vector;
-    bool is_off_screen = any(lessThan(prev_uv, vec2(0.0))) || any(greaterThan(prev_uv, vec2(1.0)));
-
-    if (is_off_screen) return current_color;
-
-
-    vec3 history_color = texture(history_sampler, prev_uv).rgb;
-
-
-    vec3 diff = abs(history_color.rgb - current_color.rgb);
-    float max_diff = max(diff.r, max(diff.g, diff.b));
-
-    if (max_diff > COLOR_THRESHOLD) {
-        return current_color;
-    }
-
-    return mix(history_color, current_color, ACCUMULATION_FACTOR);
-}
-
 void main() {
     ivec2 size = imageSize(accumulation_images[0]);
     ivec2 pixel_coords = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 local_coords = ivec2(gl_LocalInvocationID.xy);
+    ivec2 tile_base = ivec2(gl_WorkGroupID.xy) * TILE_SIZE - TILE_BORDER;
+
+    // Cooperative tile load: all 256 threads must participate (do NOT early-exit before barrier).
+    uint thread_idx = gl_LocalInvocationIndex;
+    for (uint i = thread_idx; i < TILE_FULL * TILE_FULL; i += TILE_SIZE * TILE_SIZE) {
+        ivec2 local_pos = ivec2(i % TILE_FULL, i / TILE_FULL);
+        ivec2 sample_pos = clamp(tile_base + local_pos, ivec2(0), size - 1);
+        tile_color[i] = texelFetch(raw_rt_color, sample_pos, 0).rgb;
+    }
+    barrier();
+
     if (pixel_coords.x >= size.x || pixel_coords.y >= size.y) return;
 
-    vec3 current_color = texelFetch(raw_rt_color, pixel_coords, 0).rgb;
-    vec2 uv = (vec2(pixel_coords) + 0.5) / vec2(size);
+    // Read center from tile.
+    ivec2 tile_center = local_coords + ivec2(TILE_BORDER);
+    vec3 current_color = tile_color[tile_center.y * TILE_FULL + tile_center.x];
 
-    // We look at the 3x3 area around the current pixel to see what colors are "legal"
     vec3 min_color = current_color;
     vec3 max_color = current_color;
     float center_luma = get_luminance(current_color);
@@ -59,43 +53,34 @@ void main() {
     for (int y = -1; y <= 1; y++) {
         for (int x = -1; x <= 1; x++) {
             if (x == 0 && y == 0) continue;
-            ivec2 neighbor_coords = clamp(pixel_coords + ivec2(x, y), ivec2(0), size - 1);
-            vec3 neighbor_color = texelFetch(raw_rt_color, neighbor_coords, 0).rgb;
+            ivec2 tile_pos = tile_center + ivec2(x, y);
+            vec3 neighbor_color = tile_color[tile_pos.y * TILE_FULL + tile_pos.x];
 
             float neighbor_luma = get_luminance(neighbor_color);
-            if (abs(neighbor_luma - center_luma) < max(center_luma * 5.0, 0.5)) {
+            float luma_threshold = max(center_luma * 5.0, 0.08);
+            if (abs(neighbor_luma - center_luma) < luma_threshold) {
                 min_color = min(min_color, neighbor_color);
                 max_color = max(max_color, neighbor_color);
             }
         }
     }
+
+    vec2 uv = (vec2(pixel_coords) + 0.5) / vec2(size);
     vec2 motion_vector = imageLoad(motion_vector_image, pixel_coords).rg;
-
-
     vec2 prev_uv = uv - motion_vector;
 
     uint history_idx = pc.frame_count % 2;
     uint accum_idx   = (pc.frame_count + 1) % 2;
 
-    // Default to current if off-screen or first frames
     vec3 accumulated_color = current_color;
 
     bool is_off_screen = any(lessThan(prev_uv, vec2(0.0))) || any(greaterThan(prev_uv, vec2(1.0)));
 
     if (!is_off_screen && pc.frame_count > 2) {
-        //Sub-pixel Fetch (Bilinear)
         vec3 history_color = texture(history_samplers[history_idx], prev_uv).rgb;
-
-        // If it's a "ghost" (color from an old object), it gets crushed to the new color.
         vec3 clamped_history = clamp(history_color, min_color, max_color);
-
         accumulated_color = mix(clamped_history, current_color, ACCUMULATION_FACTOR);
     }
 
-    //imageStore(accumulation_images[accum_idx], pixel_coords, vec4(motion_vector * 100000.0, 0.0, 1.0));
-    //return;
     imageStore(accumulation_images[accum_idx], pixel_coords, vec4(accumulated_color, 1.0));
-    //imageStore(accumulation_images[accum_idx], pixel_coords, vec4(mix(motion_vector.r, accumulated_color.r, 0.5),mix(motion_vector.g, accumulated_color.g, 0.5),accumulated_color.b, 1.0));
-
-
 }
