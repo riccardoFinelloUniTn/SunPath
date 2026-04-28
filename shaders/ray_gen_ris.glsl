@@ -169,7 +169,7 @@ void main() {
     // Phase 2: RIS Initial Audition
     Reservoir current_r = Reservoir(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0);
     uint num_lights = emissive_triangles.length();
-    int RIS_CANDIDATES = 8;
+    int RIS_CANDIDATES = 16;
 
     if (num_lights > 0 && roughness > 0.2) {
         for(int i = 0; i < RIS_CANDIDATES; i++) {
