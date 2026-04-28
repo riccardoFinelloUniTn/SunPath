@@ -15,7 +15,7 @@ layout(set = 0, binding = 1, rg16f)   uniform readonly image2D motion_vector_ima
 layout(set = 0, binding = 2, r11f_g11f_b10f) uniform image2D accumulation_images[2];
 layout(set = 0, binding = 3)          uniform sampler2D history_samplers[2];
 
-const float ACCUMULATION_FACTOR = 0.18;
+const float ACCUMULATION_FACTOR = 0.14;
 
 // Shared tile for 3x3 neighborhood clamp. 256 threads cooperatively load 324 texels (~1.27/thread).
 // Reduces 9 texelFetch/pixel to ~1.27/pixel plus avoids L1 cache contention.
@@ -57,7 +57,8 @@ void main() {
             vec3 neighbor_color = tile_color[tile_pos.y * TILE_FULL + tile_pos.x];
 
             float neighbor_luma = get_luminance(neighbor_color);
-            if (abs(neighbor_luma - center_luma) < max(center_luma * 5.0, 0.5)) {
+            float luma_threshold = max(center_luma * 5.0, 0.08);
+            if (abs(neighbor_luma - center_luma) < luma_threshold) {
                 min_color = min(min_color, neighbor_color);
                 max_color = max(max_color, neighbor_color);
             }

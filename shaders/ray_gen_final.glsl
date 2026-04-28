@@ -21,6 +21,11 @@ Reservoir read_current_reservoir(ivec2 coord) {
     return reservoirs[g_current_buf_idx].r[idx];
 }
 
+ReservoirGI read_current_gi_reservoir(ivec2 coord) {
+    uint idx = get_pixel_index(coord, gl_LaunchSizeEXT.xy);
+    return reservoirs_gi[g_current_buf_idx].r[idx];
+}
+
 void main() {
     vec3 total_radiance = vec3(0.0);
     int SAMPLES = 1;
@@ -154,6 +159,8 @@ void main() {
                         if (abs(current_depth - neighbor_depth) > 0.1 * current_depth) continue;
 
                         Reservoir neighbor_r = read_current_reservoir(neighbor_coord);
+                        neighbor_r.W = min(neighbor_r.W, 20.0);
+                        neighbor_r.M = min(neighbor_r.M, 10.0);
                         if (neighbor_r.W > 0.0 && neighbor_r.light_idx < num_lights) {
                             emissive_triangle_t neighbor_light = emissive_triangles[neighbor_r.light_idx];
                             vec3 f_y_neighbor = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, neighbor_light, neighbor_r.light_pos, neighbor_r.light_normal);
@@ -166,7 +173,8 @@ void main() {
                         emissive_triangle_t winner = emissive_triangles[spatial_r.light_idx];
                         vec3 f_y_winner = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, winner, spatial_r.light_pos, spatial_r.light_normal);
                         float p_hat_winner = max(f_y_winner.r, max(f_y_winner.g, f_y_winner.b));
-                        spatial_r.W = spatial_r.w_sum / max(spatial_r.M * p_hat_winner, 0.0001);
+                        spatial_r.W = spatial_r.w_sum / max(spatial_r.M * p_hat_winner, 1e-3);
+                        spatial_r.W = min(spatial_r.W, 50.0);
 
                         vec3 shadow_dir = spatial_r.light_pos - hitPos;
                         float shadow_dist = max(length(shadow_dir), 0.0001);
@@ -183,6 +191,94 @@ void main() {
                             prev_did_nee = true;
                         }
                     }
+
+                    //ReSTIR GI
+
+
+                    ReservoirGI combined = read_current_gi_reservoir(pixel_coord);
+
+                    const int   GI_SPATIAL_SAMPLES = 3;
+                    const float GI_SPATIAL_RADIUS  = 20.0;
+                    float gi_current_depth = length(hitPos - origin.xyz);
+
+                    for (int s = 0; s < GI_SPATIAL_SAMPLES; s++) {
+                        float gi_angle  = rnd() * 2.0 * 3.14159;
+                        float gi_radius = sqrt(rnd()) * GI_SPATIAL_RADIUS;
+                        ivec2 nc = pixel_coord + ivec2(cos(gi_angle) * gi_radius, sin(gi_angle) * gi_radius);
+
+                        if (nc == pixel_coord) continue;
+                        if (nc.x < 0 || nc.y < 0 || nc.x >= gl_LaunchSizeEXT.x || nc.y >= gl_LaunchSizeEXT.y) continue;
+
+                        vec3  neighbor_normal = imageLoad(normal_image, nc).xyz;
+                        float neighbor_depth  = imageLoad(depth_image,  nc).x;
+
+                        // G-buffer gating on x1 (same thresholds as DI spatial reuse above).
+                        if (dot(hit_normal, neighbor_normal) < 0.9) continue;
+                        if (abs(gi_current_depth - neighbor_depth) > 0.1 * gi_current_depth) continue;
+
+                        ReservoirGI neighbor_r = read_current_gi_reservoir(nc);
+                        if (neighbor_r.W <= 0.0) continue;
+
+                        neighbor_r.W = min(neighbor_r.W, 10.0);
+                        neighbor_r.M = min(neighbor_r.M, 10.0);
+
+                        vec2 npc = vec2(nc) + vec2(0.5);
+                        vec2 nUV = npc / vec2(gl_LaunchSizeEXT.xy);
+                        vec2 nd  = nUV * 2.0 - 1.0;
+                        vec4 nt  = matrices_uniform_buffer.proj_inverse * vec4(nd.x, nd.y, 1, 1);
+                        vec4 ndir = matrices_uniform_buffer.view_inverse * vec4(normalize(nt.xyz), 0);
+                        vec3 neighbor_x1 = origin.xyz + ndir.xyz * neighbor_depth;
+
+                        vec3  w_new = neighbor_r.sample_pos - hitPos;
+                        vec3  w_old = neighbor_r.sample_pos - neighbor_x1;
+                        float d_new = max(length(w_new), 1e-4);
+                        float d_old = max(length(w_old), 1e-4);
+                        vec3  n_x2  = unpack_normal(neighbor_r.sample_normal_packed);
+                        float cos_new = max(dot(n_x2, -w_new / d_new), 0.0);
+                        float cos_old = max(dot(n_x2, -w_old / d_old), 0.0);
+                        if (cos_new <= 0.0 || cos_old <= 0.0) continue;
+
+                        float jacobian = (cos_new * d_old * d_old) / max(cos_old * d_new * d_new, 1e-4);
+                        jacobian = clamp(jacobian, 0.0, 10.0);
+
+                        // Per-candidate visibility: reject if x2 not visible from our x1.
+                        vec3 gi_spatial_dir = w_new / d_new;
+                        if (dot(hit_normal, gi_spatial_dir) <= 0.0) continue;
+                        uint gi_spatial_vis = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT;
+                        prd.dist = 1.0;
+                        traceRayEXT(tlas, gi_spatial_vis, 0xFF, 0, 0, 0, hitPos, 0.001, gi_spatial_dir, d_new - 0.001, 0);
+                        if (prd.dist >= 0.0) continue; // occluded — don't bleed energy across silhouettes
+
+                        float p_hat_neighbor = gi_target_pdf(hitPos, hit_normal, hit_albedo, metallic, neighbor_r.sample_pos, neighbor_r.sample_radiance);
+                        merge_reservoirs_gi(combined, neighbor_r, p_hat_neighbor, jacobian, rnd());
+                    }
+
+                    float p_hat_final = gi_target_pdf(hitPos, hit_normal, hit_albedo, metallic, combined.sample_pos, combined.sample_radiance);
+                    combined.W = (p_hat_final > 1e-3) ? (combined.w_sum / max(combined.M, 1.0) / p_hat_final) : 0.0;
+                    combined.W = min(combined.W, 20.0);
+
+                    if (combined.W > 0.0) {
+                        vec3 gi_x2_dir = combined.sample_pos - hitPos;
+                        float gi_x2_dist = max(length(gi_x2_dir), 0.0001);
+                        gi_x2_dir /= gi_x2_dist;
+
+                        float gi_NdotL = max(dot(hit_normal, gi_x2_dir), 0.0);
+                        if (gi_NdotL > 0.0) {
+                            // Same any-hit consideration as GI spatial visibility above: drop
+                            // gl_RayFlagsOpaqueEXT so alpha-cutout geometry is treated as
+                            // transparent by the any-hit shader instead of casting a false
+                            // hard shadow on the GI final-visibility shadow ray.
+                            uint gi_final_vis = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT;
+                            prd.dist = 1.0;
+                            traceRayEXT(tlas, gi_final_vis, 0xFF, 0, 0, 0, hitPos, 0.001, gi_x2_dir, gi_x2_dist - 0.001, 0);
+
+                            if (prd.dist < 0.0) {
+                                vec3 gi_f_diffuse = hit_albedo * (1.0 - metallic) / 3.14159;
+                                radiance += combined.sample_radiance * gi_f_diffuse * gi_NdotL * combined.W * throughput;
+                            }
+                        }
+                    }
+                    break; // GI replaces the rest of the random walk at the first rough diffuse hit.
                 }
                 // STANDARD NEE (Rough Indirect Bounces)
                 else if (restir_evaluated && roughness > 0.2) {
@@ -207,14 +303,17 @@ void main() {
                     float cos_theta_surface = max(dot(hit_normal, shadow_ray_dir), 0.0);
 
                     if (cos_theta_light > 0.0 && cos_theta_surface > 0.0) {
-                        uint shadow_ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT | gl_RayFlagsOpaqueEXT;
+                        // No gl_RayFlagsOpaqueEXT: alpha-tested geometry must be able to
+                        // reject intersections via any_hit.glsl instead of being forced opaque.
+                        uint shadow_ray_flags = gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsSkipClosestHitShaderEXT;
                         prd.dist = 1.0;
                         traceRayEXT(tlas, shadow_ray_flags, 0xFF, 0, 0, 0, hitPos, 0.001, shadow_ray_dir, light_dist - 0.001, 0);
 
                         if (prd.dist < 0.0) {
                             float light_area = light.v0_area.w;
-                            float solid_angle_pdf = (light_dist * light_dist) / (cos_theta_light * light_area * float(num_lights));
-                            radiance += (light.emission.rgb * hit_albedo * throughput * cos_theta_surface) / (solid_angle_pdf * 3.14159);
+                            float solid_angle_pdf = (light_dist * light_dist) / max(cos_theta_light * light_area * float(num_lights), 1e-4);
+                            vec3 nee_contrib = (light.emission.rgb * hit_albedo * throughput * cos_theta_surface) / (solid_angle_pdf * 3.14159);
+                            radiance += min(nee_contrib, vec3(5.0));
                         }
                         prev_did_nee = true;
                     }
@@ -273,5 +372,12 @@ void main() {
     }
 
     vec3 current_frame_color = total_radiance / float(SAMPLES);
+
+    vec2 mv = imageLoad(motion_vector_image, pixel_coord).rg;
+
+
     imageStore(raw_color_image, ivec2(gl_LaunchIDEXT.xy), vec4(current_frame_color, 1.0));
+    //ReservoirGI vis = read_current_gi_reservoir(pixel_coord);
+    //imageStore(raw_color_image, ivec2(gl_LaunchIDEXT.xy), vec4(clamp(vis.W, 0.0, 1.0), clamp(vis.M / 20.0, 0.0, 1.0), 0.0, 1.0));
+
 }
