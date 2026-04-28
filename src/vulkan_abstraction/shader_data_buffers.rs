@@ -14,11 +14,6 @@ struct MatricesBufferContents {
     pub prev_view_proj: na::Matrix4<f32>,
 }
 
-// The GLSL UBO (binding=2 in common.glsl) declares 4 mat4 fields under implicit std140,
-// which places them at offsets 0, 64, 128, 192 for a total of 256 bytes. The Rust side
-// MUST match this exactly: any mismatch silently corrupts view_proj / prev_view_proj
-// because those sit at offsets 128 and 192 and a too-small struct would truncate them,
-// while a too-large struct would shift them relative to what the shader reads.
 const _: () = assert!(
     std::mem::size_of::<MatricesBufferContents>() == 256,
     "MatricesBufferContents must be exactly 256 bytes to match the std140 UBO layout"
