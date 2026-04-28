@@ -58,7 +58,7 @@ struct ReservoirGI {
 
 // Descriptor array: reservoirs_gi[0] = buffer A, reservoirs_gi[1] = buffer B.
 // Same ping-pong scheme as the DI reservoirs; index is uniform across the dispatch.
-layout(std430, set = 0, binding = 13) buffer ReservoirGiBuffer { ReservoirGI r[]; } reservoirs_gi[2];
+layout(std430, set = 0, binding = 14) buffer ReservoirGiBuffer { ReservoirGI r[]; } reservoirs_gi[2];
 
 // Target pdf for the GI reservoir (luminance of the diffuse indirect contribution from the
 // reconnection vertex x2 back to the shading point at (shade_pos, shade_normal)). Used

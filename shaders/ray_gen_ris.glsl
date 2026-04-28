@@ -161,7 +161,7 @@ void main() {
         imageStore(normal_image, pixel_coord, vec4(0.0));
         imageStore(diffuse_image, pixel_coord, vec4(0.0));
         imageStore(motion_vector_image, pixel_coord, vec4(0.0));
-        write_current_reservoir(pixel_coord, Reservoir(0, uint[3](0,0,0), vec3(0), 0.0, vec3(0), 0.0, 0.0, 0.0, uint[2](0,0)));
+        write_current_reservoir(pixel_coord, Reservoir(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0));
         return;
     }
 
@@ -203,7 +203,6 @@ void main() {
 
             vec3 f_y = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, cand_light, cand_pos, cand_normal);
             float p_hat = max(f_y.r, max(f_y.g, f_y.b));
-            float cand_area = cand_light.v0_area.w;
             float p_y = 1.0 / max(float(num_lights) * cand_area, 0.0001);
 
             // Inline update_reservoir
@@ -303,18 +302,32 @@ void main() {
             // shadow-test and add the diffuse reflection toward x1. This is what turns the
             // GI reservoir from "only emissive-visibility" into real 1-bounce diffuse indirect
             // (Ouyang 2021, Sec. 5.1 — NEE at the reconnection vertex).
-            uint nee_num_lights = emissive_triangles.length();
+            uint nee_num_lights = emissive_indirection.length();
             if (nee_num_lights > 0) {
                 uint nee_idx = min(uint(rnd() * nee_num_lights), nee_num_lights - 1);
-                emissive_triangle_t nee_light = emissive_triangles[nee_idx];
+                emissive_indirection_entry_t nee_entry = emissive_indirection[nee_idx];
+                emissive_triangle_t nee_light = emissive_triangles[nee_entry.blas_tri_index];
+                entity_transform_t nee_xform = entity_transforms[nee_entry.entity_id];
+
+                // Transform vertices from local space to world space
+                vec3 nwv0 = vec3(dot(nee_xform.rows[0], vec4(nee_light.v0.xyz, 1.0)),
+                                 dot(nee_xform.rows[1], vec4(nee_light.v0.xyz, 1.0)),
+                                 dot(nee_xform.rows[2], vec4(nee_light.v0.xyz, 1.0)));
+                vec3 nwv1 = vec3(dot(nee_xform.rows[0], vec4(nee_light.v1.xyz, 1.0)),
+                                 dot(nee_xform.rows[1], vec4(nee_light.v1.xyz, 1.0)),
+                                 dot(nee_xform.rows[2], vec4(nee_light.v1.xyz, 1.0)));
+                vec3 nwv2 = vec3(dot(nee_xform.rows[0], vec4(nee_light.v2.xyz, 1.0)),
+                                 dot(nee_xform.rows[1], vec4(nee_light.v2.xyz, 1.0)),
+                                 dot(nee_xform.rows[2], vec4(nee_light.v2.xyz, 1.0)));
 
                 float sq = sqrt(rnd());
                 float nu = 1.0 - sq;
                 float nv = rnd() * sq;
                 float nw = 1.0 - nu - nv;
 
-                vec3 nee_pos    = nee_light.v0_area.xyz * nu + nee_light.v1.xyz * nv + nee_light.v2.xyz * nw;
-                vec3 nee_normal = normalize(cross(nee_light.v1.xyz - nee_light.v0_area.xyz, nee_light.v2.xyz - nee_light.v0_area.xyz));
+                vec3 nee_pos    = nwv0 * nu + nwv1 * nv + nwv2 * nw;
+                vec3 nee_normal = normalize(cross(nwv1 - nwv0, nwv2 - nwv0));
+                float nee_area  = 0.5 * length(cross(nwv1 - nwv0, nwv2 - nwv0));
 
                 vec3 to_light = nee_pos - sample_pos;
                 float nee_dist = max(length(to_light), 0.0001);
@@ -336,7 +349,6 @@ void main() {
                     if (prd.dist < 0.0) {
                         // Same diffuse-only NEE convention as the existing random-walk NEE:
                         // f_r = albedo / π, no (1-metallic) factor to match the final-pass formula.
-                        float nee_area   = nee_light.v0_area.w;
                         float nee_pdf_sa = (nee_dist * nee_dist) / max(nee_cos_light * nee_area * float(nee_num_lights), 0.0001);
                         sample_radiance += (nee_light.emission.rgb * x2_albedo * nee_cos_surf) / (nee_pdf_sa * 3.14159);
                     }

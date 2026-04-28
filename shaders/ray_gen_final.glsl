@@ -333,7 +333,6 @@ void main() {
                         traceRayEXT(tlas, shadow_ray_flags, 0xFF, 0, 0, 0, hitPos, 0.001, shadow_ray_dir, light_dist - 0.001, 0);
 
                         if (prd.dist < 0.0) {
-                            float light_area = light.v0_area.w;
                             float solid_angle_pdf = (light_dist * light_dist) / max(cos_theta_light * light_area * float(num_lights), 1e-4);
                             vec3 nee_contrib = (light.emission.rgb * hit_albedo * throughput * cos_theta_surface) / (solid_angle_pdf * 3.14159);
                             radiance += min(nee_contrib, vec3(5.0));

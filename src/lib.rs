@@ -1706,7 +1706,7 @@ const IS_DEBUG_BUILD: bool = cfg!(debug_assertions);
 
 impl Drop for Renderer {
     fn drop(&mut self) {
-        match self.core().queue().wait_idle() {
+        match self.core().graphics_queue().wait_idle() {
             Ok(()) => {}
             Err(e) => match e.get_source() {
                 ErrorSource::Vulkan(e) => {
