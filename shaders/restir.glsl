@@ -18,7 +18,7 @@ struct Reservoir {
 // Descriptor array: reservoirs[0] = buffer A, reservoirs[1] = buffer B.
 // Index is uniform across the dispatch (derived from push-constant frame_count parity),
 // so no descriptor indexing extension is required.
-layout(std430, set = 0, binding = 11) buffer ReservoirBuffer { Reservoir r[]; } reservoirs[2];
+layout(std430, set = 0, binding = 13) buffer ReservoirBuffer { Reservoir r[]; } reservoirs[2];
 
 uint get_pixel_index(ivec2 coord, vec2 launch_size) {
     return coord.y * uint(launch_size.x) + coord.x;
@@ -58,7 +58,7 @@ struct ReservoirGI {
 
 // Descriptor array: reservoirs_gi[0] = buffer A, reservoirs_gi[1] = buffer B.
 // Same ping-pong scheme as the DI reservoirs; index is uniform across the dispatch.
-layout(std430, set = 0, binding = 13) buffer ReservoirGiBuffer { ReservoirGI r[]; } reservoirs_gi[2];
+layout(std430, set = 0, binding = 14) buffer ReservoirGiBuffer { ReservoirGI r[]; } reservoirs_gi[2];
 
 // Target pdf for the GI reservoir (luminance of the diffuse indirect contribution from the
 // reconnection vertex x2 back to the shading point at (shade_pos, shade_normal)). Used

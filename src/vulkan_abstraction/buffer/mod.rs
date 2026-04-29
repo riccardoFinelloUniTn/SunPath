@@ -1,14 +1,32 @@
+pub mod arena_core;
+pub mod arena_host;
+pub mod arena_keyed;
+pub mod gpu_only_buffer;
 pub mod index_buffer;
+pub mod staging_buffer;
+pub mod uniform_buffer;
 pub mod vertex_buffer;
+pub mod arena_gpu;
 
 //why use and not just mod?
+pub use arena_core::*;
+pub use arena_gpu::*;
+pub use arena_host::*;
+pub use arena_keyed::*;
+pub use gpu_only_buffer::*;
 pub use index_buffer::*;
+pub use staging_buffer::*;
+use std::marker::PhantomData;
+pub use uniform_buffer::*;
 pub use vertex_buffer::*;
 
 use crate::{error::*, vulkan_abstraction};
 use ash::vk;
+use ash::vk::{BufferUsageFlags, BufferUsageFlags2KHR, DeviceAddress, DeviceSize, Handle};
+use log::{error, info};
 use std::rc::Rc;
-
+//TODO revert capacity as vk::device length some methods signatures
+//TODO should gpu only buffer have a generic and some methods can be moved inside the buffer trait like new,new with data ecc.. with a default impl
 pub fn get_memory_type_index(
     core: &vulkan_abstraction::Core,
     mem_prop_flags: vk::MemoryPropertyFlags,
@@ -35,126 +53,71 @@ pub fn get_memory_type_index(
 
     Ok(idx as u32)
 }
+pub trait Buffer {
+    fn inner(&self) -> vk::Buffer;
 
-//I think Buffer should be a trait with some default implementations
-pub struct Buffer {
-    core: Rc<vulkan_abstraction::Core>,
+    fn usage(&self) -> BufferUsageFlags;
 
-    buffer: vk::Buffer,
-    allocation: gpu_allocator::vulkan::Allocation,
+    fn raw(&self) -> &vulkan_abstraction::RawBuffer;
 
-    byte_size: u64,
+    fn raw_mut(&mut self) -> &mut vulkan_abstraction::RawBuffer;
+
+    fn byte_size(&self) -> vk::DeviceSize;
+    fn is_null(&self) -> bool;
+    fn get_device_address(&self) -> vk::DeviceAddress;
+    fn new_null(core: Rc<vulkan_abstraction::Core>) -> Self
+    where
+        Self: Sized;
 }
 
-impl Buffer {
-    pub fn new_staging<V>(core: Rc<vulkan_abstraction::Core>, size: usize) -> SrResult<Self> {
-        Self::new::<V>(
-            core,
-            size,
-            gpu_allocator::MemoryLocation::CpuToGpu,
-            vk::BufferUsageFlags::TRANSFER_SRC,
-            "staging buffer",
-        )
+/// Exclusive trait for host-visible buffers (CpuToGpu or GpuToCpu) that can be mapped.
+pub trait HostAccessibleBuffer<T>: Buffer {
+    fn map_mut(&mut self) -> SrResult<&mut [T]>;
+
+    fn map(&self) -> SrResult<&[T]>;
+
+    fn get(&self) -> SrResult<&T> {
+        self.map().map(|s| &s[0])
     }
 
-    pub fn new_uniform<T>(core: Rc<vulkan_abstraction::Core>, len: usize) -> SrResult<Self> {
-        Self::new::<T>(
-            core,
-            len,
-            gpu_allocator::MemoryLocation::CpuToGpu,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            "uniform buffer",
-        )
+    fn get_mut(&mut self) -> SrResult<&mut T> {
+        self.map_mut().map(|s| &mut s[0])
     }
 
-    pub fn new_storage_from_data<T: Copy>(core: Rc<vulkan_abstraction::Core>, data: &[T], name: &'static str) -> SrResult<Self> {
-        Self::new_from_data::<T>(
-            core,
-            data,
-            gpu_allocator::MemoryLocation::GpuOnly,
-            vk::BufferUsageFlags::STORAGE_BUFFER,
-            name,
-        )
-    }
+    fn len(&self) -> usize;
+}
 
-    pub fn new_staging_from_data<T: Copy>(core: Rc<vulkan_abstraction::Core>, data: &[T]) -> SrResult<Self> {
-        if data.len() == 0 {
-            return Ok(Self::new_null(core));
-        }
-        //create staging buffer
-        let mut staging_buffer = Self::new_staging::<T>(core, data.len())?;
+pub struct RawBuffer {
+    core: Rc<vulkan_abstraction::Core>,
+    buffer: vk::Buffer,
+    allocation: gpu_allocator::vulkan::Allocation,
+    byte_size: u64,
+    usage: BufferUsageFlags,
+}
 
-        //copy data to staging buffer
-        let mapped_memory = staging_buffer.map::<T>()?;
-        mapped_memory[0..data.len()].copy_from_slice(data);
-
-        Ok(staging_buffer)
-    }
-
-    pub fn new_from_data<T: Copy>(
+impl RawBuffer {
+    pub fn new_aligned(
         core: Rc<vulkan_abstraction::Core>,
-        data: &[T],
-        mem_location: gpu_allocator::MemoryLocation,
-        buffer_usage_flags: vk::BufferUsageFlags,
-        name: &'static str,
-    ) -> SrResult<Self> {
-        if data.len() == 0 {
-            return Ok(Self::new_null(core));
-        }
-
-        let staging_buffer = Self::new_staging_from_data(Rc::clone(&core), data)?;
-        let buffer = Self::new::<T>(
-            Rc::clone(&core),
-            data.len(),
-            mem_location,
-            buffer_usage_flags | vk::BufferUsageFlags::TRANSFER_DST,
-            name,
-        )?;
-        Self::clone_buffer(&core, &staging_buffer, &buffer)?;
-
-        Ok(buffer)
-    }
-
-    pub fn new_null(core: Rc<vulkan_abstraction::Core>) -> Self {
-        Self {
-            core,
-            buffer: vk::Buffer::null(),
-            allocation: gpu_allocator::vulkan::Allocation::default(),
-            byte_size: 0,
-        }
-    }
-
-    /// # Create a new Buffer
-    ///
-    /// ## Arguments:
-    /// - `len`: the number of items, not the amount of memory. the functions take care of that calculation internally
-    pub fn new<V>(
-        core: Rc<vulkan_abstraction::Core>,
-        len: usize,
-        memory_location: gpu_allocator::MemoryLocation,
-        buffer_usage_flags: vk::BufferUsageFlags,
-        name: &'static str,
-    ) -> SrResult<Self> {
-        Self::new_aligned::<V>(core, len, 1, memory_location, buffer_usage_flags, name)
-    }
-
-    pub fn new_aligned<V>(
-        core: Rc<vulkan_abstraction::Core>,
-        len: usize,
+        byte_size: vk::DeviceSize,
         alignment: u64,
         memory_location: gpu_allocator::MemoryLocation,
         buffer_usage_flags: vk::BufferUsageFlags,
         name: &'static str,
     ) -> SrResult<Self> {
-        if len == 0 {
+        if byte_size == 0 {
             return Ok(Self::new_null(core));
         }
 
+        let queue_family_indices = [
+            core.graphics_queue().queue_family_index(),
+            core.transfer_queue().queue_family_index(),
+        ];
+
         let device = core.device().inner();
-        let usable_byte_size = (len * size_of::<V>()) as vk::DeviceSize;
+
         let buffer = {
             let buf_info = vk::BufferCreateInfo::default()
-                .size(usable_byte_size)
+                .size(byte_size)
                 .usage(buffer_usage_flags)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
@@ -162,14 +125,13 @@ impl Buffer {
         };
 
         let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
-        // fix alignment
         let mem_requirements = mem_requirements.alignment(mem_requirements.alignment.max(alignment));
 
         let allocation = core.allocator_mut().allocate(&gpu_allocator::vulkan::AllocationCreateDesc {
             name,
             requirements: mem_requirements,
             location: memory_location,
-            linear: true, // Buffers are always linear
+            linear: true,
             allocation_scheme: gpu_allocator::vulkan::AllocationScheme::GpuAllocatorManaged,
         })?;
 
@@ -179,96 +141,194 @@ impl Buffer {
             core,
             buffer,
             allocation,
-            byte_size: usable_byte_size,
+            byte_size,
+            usage: buffer_usage_flags,
         })
     }
 
-    pub fn byte_size(&self) -> vk::DeviceSize {
-        self.byte_size
+    pub fn new_null(core: Rc<vulkan_abstraction::Core>) -> Self {
+        Self {
+            core,
+            buffer: vk::Buffer::null(),
+            allocation: gpu_allocator::vulkan::Allocation::default(),
+            byte_size: 0,
+            usage: BufferUsageFlags::empty(),
+        }
     }
-    pub fn map<V: Sized>(&mut self) -> SrResult<&mut [V]> {
-        if !self.is_null() {
-            let slice = self.allocation.mapped_slice_mut().unwrap();
 
+    pub fn map<V: Sized>(&self) -> SrResult<&[V]> {
+        if !self.buffer.is_null() {
+            let slice = self.allocation.mapped_slice().unwrap();
             let ret = unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut V, slice.len() / std::mem::size_of::<V>()) };
-
             Ok(ret)
         } else {
             Ok(&mut [])
         }
     }
 
-    // mainly useful to copy from a staging buffer to a device buffer
-    pub fn clone_buffer(core: &vulkan_abstraction::Core, src: &Buffer, dst: &Buffer) -> SrResult<()> {
-        if src.is_null() {
-            return Ok(());
+    pub fn map_mut<V: Sized>(&mut self) -> SrResult<&mut [V]> {
+        if !self.buffer.is_null() {
+            let slice = self.allocation.mapped_slice_mut().unwrap();
+            let ret = unsafe { std::slice::from_raw_parts_mut(slice.as_ptr() as *mut V, slice.len() / std::mem::size_of::<V>()) };
+            Ok(ret)
+        } else {
+            Ok(&mut [])
         }
-        if dst.is_null() {
-            return Err(SrError::new_custom(
-                "attempted to clone from a non-null buffer to a null buffer".to_string(),
-            ));
-        }
-
-        let device = core.device().inner();
-        let cmd_buf = vulkan_abstraction::cmd_buffer::new_command_buffer(core.cmd_pool(), core.device().inner())?;
-
-        let begin_info = vk::CommandBufferBeginInfo::default().flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-        unsafe { device.begin_command_buffer(cmd_buf, &begin_info) }?;
-
-        debug_assert!(src.byte_size() <= dst.byte_size());
-
-        //copy src.byte_size() bytes, from position 0 in src buffer to position 0 in dst buffer
-        let regions = [vk::BufferCopy::default().size(src.byte_size()).src_offset(0).dst_offset(0)];
-
-        unsafe { device.cmd_copy_buffer(cmd_buf, src.inner(), dst.inner(), &regions) };
-
-        unsafe { device.end_command_buffer(cmd_buf) }?;
-
-        core.queue().submit_sync(cmd_buf)?;
-
-        unsafe { device.free_command_buffers(core.cmd_pool().inner(), &[cmd_buf]) };
-
-        Ok(())
-    }
-
-    pub fn get_device_address(&self) -> vk::DeviceAddress {
-        if self.is_null() {
-            return 0 as vk::DeviceAddress;
-        }
-
-        let buffer_device_address_info = vk::BufferDeviceAddressInfo::default().buffer(self.buffer);
-        unsafe {
-            self.core
-                .device()
-                .inner()
-                .get_buffer_device_address(&buffer_device_address_info)
-        }
-    }
-
-    pub fn is_null(&self) -> bool {
-        self.buffer == vk::Buffer::null()
-    }
-
-    pub fn inner(&self) -> vk::Buffer {
-        self.buffer
     }
 }
 
-impl Drop for Buffer {
+impl Drop for RawBuffer {
     fn drop(&mut self) {
-        let device = self.core.device().inner();
-        unsafe {
-            device.destroy_buffer(self.buffer, None);
-        }
-
-        //need to take ownership to pass to free
-        let allocation = std::mem::replace(&mut self.allocation, gpu_allocator::vulkan::Allocation::default());
-        match self.core.allocator_mut().free(allocation) {
-            Ok(()) => {}
-            Err(e) => {
-                log::error!("gpu_allocator::vulkan::Allocator::free returned {e} in sunray::vulkan_abstraction::Buffer::drop")
+        if self.buffer != vk::Buffer::null() {
+            let device = self.core.device().inner();
+            unsafe {
+                device.destroy_buffer(self.buffer, None);
+            }
+            let allocation = std::mem::replace(&mut self.allocation, gpu_allocator::vulkan::Allocation::default());
+            if let Err(e) = self.core.allocator_mut().free(allocation) {
+                log::error!("Allocator::free returned {e} in RawBuffer::drop");
             }
         }
     }
+}
+#[macro_export]
+macro_rules! impl_buffer_trait {
+    ($type:ident < $first_gen:ident $(, $rest_gens:ident)* >) => {
+        impl < $first_gen $(, $rest_gens)* > Buffer for $type < $first_gen $(, $rest_gens)* > {
+            fn inner(&self) -> vk::Buffer {
+                self.raw.buffer
+            }
+
+            fn raw(&self) -> &vulkan_abstraction::RawBuffer {
+                &self.raw
+            }
+
+            fn usage(&self) -> vk::BufferUsageFlags {
+                self.raw().usage.clone()
+            }
+
+             fn raw_mut(&mut self) -> &mut vulkan_abstraction::RawBuffer {
+                &mut self.raw
+            }
+
+
+            fn byte_size(&self) -> vk::DeviceSize {
+                self.raw.byte_size
+            }
+
+            fn is_null(&self) -> bool {
+                self.raw.buffer == vk::Buffer::null()
+            }
+
+            fn get_device_address(&self) -> vk::DeviceAddress {
+                if self.is_null() {
+                    return 0;
+                }
+                let info = vk::BufferDeviceAddressInfo::default().buffer(self.raw.buffer);
+                unsafe { self.raw.core.device().inner().get_buffer_device_address(&info) }
+            }
+
+            fn new_null(core: Rc<vulkan_abstraction::Core>) -> Self {
+                Self {
+                    raw: RawBuffer::new_null(core),
+                    _marker: Default::default(),
+                }
+            }
+        }
+    };
+
+    ($type:ident) => {
+        impl Buffer for $type {
+            fn inner(&self) -> vk::Buffer {
+                self.raw.buffer
+            }
+
+            fn usage(&self) -> vk::BufferUsageFlags {
+                self.raw().usage.clone()
+            }
+
+             fn raw(&self) -> &vulkan_abstraction::RawBuffer {
+                &self.raw
+            }
+
+             fn raw_mut(&mut self) -> &mut vulkan_abstraction::RawBuffer {
+                &mut self.raw
+            }
+
+
+            fn byte_size(&self) -> vk::DeviceSize {
+                self.raw.byte_size
+            }
+
+            fn is_null(&self) -> bool {
+                self.raw.buffer == vk::Buffer::null()
+            }
+
+            fn get_device_address(&self) -> vk::DeviceAddress {
+                if self.is_null() {
+                    return 0;
+                }
+                let info = vk::BufferDeviceAddressInfo::default().buffer(self.raw.buffer);
+                unsafe { self.raw.core.device().inner().get_buffer_device_address(&info) }
+            }
+
+            fn new_null(core: Rc<vulkan_abstraction::Core>) -> Self {
+                Self {
+                    raw: RawBuffer::new_null(core),
+                }
+            }
+        }
+    };
+}
+
+/// Derives the appropriate pipeline stages and access flags for reading a buffer
+/// based on the usage flags it was created with.
+pub fn infer_read_masks_from_usage(usage: vk::BufferUsageFlags) -> (vk::PipelineStageFlags2, vk::AccessFlags2) {
+    let mut stage_mask = vk::PipelineStageFlags2::empty();
+    let mut access_mask = vk::AccessFlags2::empty();
+
+    if usage.contains(vk::BufferUsageFlags::VERTEX_BUFFER) {
+        stage_mask |= vk::PipelineStageFlags2::VERTEX_INPUT;
+        access_mask |= vk::AccessFlags2::VERTEX_ATTRIBUTE_READ;
+    }
+
+    if usage.contains(vk::BufferUsageFlags::INDEX_BUFFER) {
+        stage_mask |= vk::PipelineStageFlags2::VERTEX_INPUT;
+        access_mask |= vk::AccessFlags2::INDEX_READ;
+    }
+
+    if usage.contains(vk::BufferUsageFlags::UNIFORM_BUFFER) {
+        // UBOs can be read in almost any shader stage
+        stage_mask |= vk::PipelineStageFlags2::ALL_GRAPHICS | vk::PipelineStageFlags2::COMPUTE_SHADER;
+        access_mask |= vk::AccessFlags2::UNIFORM_READ;
+    }
+
+    if usage.contains(vk::BufferUsageFlags::STORAGE_BUFFER) {
+        // SSBOs can be read in compute or graphics
+        stage_mask |= vk::PipelineStageFlags2::ALL_GRAPHICS | vk::PipelineStageFlags2::COMPUTE_SHADER;
+        access_mask |= vk::AccessFlags2::SHADER_READ;
+    }
+
+    if usage.contains(vk::BufferUsageFlags::INDIRECT_BUFFER) {
+        stage_mask |= vk::PipelineStageFlags2::DRAW_INDIRECT;
+        access_mask |= vk::AccessFlags2::INDIRECT_COMMAND_READ;
+    }
+
+    // Raytracing specific flags
+    if usage.contains(vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR) {
+        stage_mask |= vk::PipelineStageFlags2::ACCELERATION_STRUCTURE_BUILD_KHR;
+        access_mask |= vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR;
+    }
+    if usage.contains(vk::BufferUsageFlags::ACCELERATION_STRUCTURE_STORAGE_KHR) {
+        stage_mask |= vk::PipelineStageFlags2::RAY_TRACING_SHADER_KHR;
+        access_mask |= vk::AccessFlags2::ACCELERATION_STRUCTURE_READ_KHR;
+    }
+
+    // Fallback if somehow it's none of the above
+    if stage_mask.is_empty() {
+        stage_mask = vk::PipelineStageFlags2::ALL_COMMANDS;
+        access_mask = vk::AccessFlags2::MEMORY_READ;
+    }
+
+    (stage_mask, access_mask)
 }

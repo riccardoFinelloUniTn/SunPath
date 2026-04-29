@@ -160,33 +160,49 @@ void main() {
         imageStore(depth_image, pixel_coord, vec4(100000.0, 0.0, 0.0, 0.0));
         imageStore(normal_image, pixel_coord, vec4(0.0));
         imageStore(diffuse_image, pixel_coord, vec4(0.0));
-        imageStore(motion_vector_image, pixel_coord, vec4(sky_motion, 0.0, 0.0));
+        imageStore(motion_vector_image, pixel_coord, vec4(0.0));
         write_current_reservoir(pixel_coord, Reservoir(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0));
-        write_current_gi_reservoir(pixel_coord, ReservoirGI(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0));
         return;
     }
 
     // Phase 2: RIS Initial Audition
     Reservoir current_r = Reservoir(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0);
-    uint num_lights = emissive_triangles.length();
+    uint num_lights = emissive_indirection.length();
     int RIS_CANDIDATES = 16;
 
     if (num_lights > 0 && roughness > 0.2) {
         for(int i = 0; i < RIS_CANDIDATES; i++) {
             uint cand_idx = min(uint(rnd() * num_lights), num_lights - 1);
-            emissive_triangle_t cand_light = emissive_triangles[cand_idx];
+            emissive_indirection_entry_t entry = emissive_indirection[cand_idx];
+            emissive_triangle_t cand_light = emissive_triangles[entry.blas_tri_index];
+            entity_transform_t xform = entity_transforms[entry.entity_id];
+
+            // Transform vertices from local space to world space
+            vec3 wv0 = vec3(dot(xform.rows[0], vec4(cand_light.v0.xyz, 1.0)),
+                            dot(xform.rows[1], vec4(cand_light.v0.xyz, 1.0)),
+                            dot(xform.rows[2], vec4(cand_light.v0.xyz, 1.0)));
+            vec3 wv1 = vec3(dot(xform.rows[0], vec4(cand_light.v1.xyz, 1.0)),
+                            dot(xform.rows[1], vec4(cand_light.v1.xyz, 1.0)),
+                            dot(xform.rows[2], vec4(cand_light.v1.xyz, 1.0)));
+            vec3 wv2 = vec3(dot(xform.rows[0], vec4(cand_light.v2.xyz, 1.0)),
+                            dot(xform.rows[1], vec4(cand_light.v2.xyz, 1.0)),
+                            dot(xform.rows[2], vec4(cand_light.v2.xyz, 1.0)));
+
+            // Compute world-space area
+            vec3 edge1 = wv1 - wv0;
+            vec3 edge2 = wv2 - wv0;
+            float cand_area = 0.5 * length(cross(edge1, edge2));
 
             float sqr1 = sqrt(rnd());
             float u = 1.0 - sqr1;
             float v = rnd() * sqr1;
             float w = 1.0 - u - v;
 
-            vec3 cand_pos = cand_light.v0_area.xyz * u + cand_light.v1.xyz * v + cand_light.v2.xyz * w;
-            vec3 cand_normal = normalize(cross(cand_light.v1.xyz - cand_light.v0_area.xyz, cand_light.v2.xyz - cand_light.v0_area.xyz));
+            vec3 cand_pos = wv0 * u + wv1 * v + wv2 * w;
+            vec3 cand_normal = normalize(cross(wv1 - wv0, wv2 - wv0));
 
             vec3 f_y = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, cand_light, cand_pos, cand_normal);
             float p_hat = max(f_y.r, max(f_y.g, f_y.b));
-            float cand_area = cand_light.v0_area.w;
             float p_y = 1.0 / max(float(num_lights) * cand_area, 0.0001);
 
             // Inline update_reservoir
@@ -200,7 +216,8 @@ void main() {
         }
 
         if (current_r.w_sum > 0.0) {
-            emissive_triangle_t winner = emissive_triangles[current_r.light_idx];
+            emissive_indirection_entry_t winner_entry = emissive_indirection[current_r.light_idx];
+            emissive_triangle_t winner = emissive_triangles[winner_entry.blas_tri_index];
             vec3 f_y_winner = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, winner, current_r.light_pos, current_r.light_normal);
             float p_hat_winner = max(f_y_winner.r, max(f_y_winner.g, f_y_winner.b));
             current_r.W = current_r.w_sum / max(current_r.M * p_hat_winner, 0.0001);
@@ -230,15 +247,17 @@ void main() {
                 // Light index validity (light count may have changed)
                 bool idx_ok = history_r.light_idx < num_lights;
 
-
-                if (history_r.W > 0.0 && history_r.M > 0.0 && idx_ok) {
-                    emissive_triangle_t hist_light = emissive_triangles[history_r.light_idx];
+                if (history_r.W > 0.0) {
+                    history_r.light_idx = min(history_r.light_idx, num_lights - 1);
+                    emissive_indirection_entry_t hist_entry = emissive_indirection[history_r.light_idx];
+                    emissive_triangle_t hist_light = emissive_triangles[hist_entry.blas_tri_index];
                     vec3 f_y_hist = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, hist_light, history_r.light_pos, history_r.light_normal);
                     float p_hat_hist = max(f_y_hist.r, max(f_y_hist.g, f_y_hist.b));
 
                     merge_reservoirs(current_r, history_r, p_hat_hist, rnd());
 
-                    emissive_triangle_t merged_winner = emissive_triangles[current_r.light_idx];
+                    emissive_indirection_entry_t merged_entry = emissive_indirection[current_r.light_idx];
+                    emissive_triangle_t merged_winner = emissive_triangles[merged_entry.blas_tri_index];
                     vec3 f_y_merged = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, merged_winner, current_r.light_pos, current_r.light_normal);
                     float p_hat_merged = max(f_y_merged.r, max(f_y_merged.g, f_y_merged.b));
                     current_r.W = current_r.w_sum / max(current_r.M * p_hat_merged, 0.0001);
@@ -283,18 +302,32 @@ void main() {
             // shadow-test and add the diffuse reflection toward x1. This is what turns the
             // GI reservoir from "only emissive-visibility" into real 1-bounce diffuse indirect
             // (Ouyang 2021, Sec. 5.1 — NEE at the reconnection vertex).
-            uint nee_num_lights = emissive_triangles.length();
+            uint nee_num_lights = emissive_indirection.length();
             if (nee_num_lights > 0) {
                 uint nee_idx = min(uint(rnd() * nee_num_lights), nee_num_lights - 1);
-                emissive_triangle_t nee_light = emissive_triangles[nee_idx];
+                emissive_indirection_entry_t nee_entry = emissive_indirection[nee_idx];
+                emissive_triangle_t nee_light = emissive_triangles[nee_entry.blas_tri_index];
+                entity_transform_t nee_xform = entity_transforms[nee_entry.entity_id];
+
+                // Transform vertices from local space to world space
+                vec3 nwv0 = vec3(dot(nee_xform.rows[0], vec4(nee_light.v0.xyz, 1.0)),
+                                 dot(nee_xform.rows[1], vec4(nee_light.v0.xyz, 1.0)),
+                                 dot(nee_xform.rows[2], vec4(nee_light.v0.xyz, 1.0)));
+                vec3 nwv1 = vec3(dot(nee_xform.rows[0], vec4(nee_light.v1.xyz, 1.0)),
+                                 dot(nee_xform.rows[1], vec4(nee_light.v1.xyz, 1.0)),
+                                 dot(nee_xform.rows[2], vec4(nee_light.v1.xyz, 1.0)));
+                vec3 nwv2 = vec3(dot(nee_xform.rows[0], vec4(nee_light.v2.xyz, 1.0)),
+                                 dot(nee_xform.rows[1], vec4(nee_light.v2.xyz, 1.0)),
+                                 dot(nee_xform.rows[2], vec4(nee_light.v2.xyz, 1.0)));
 
                 float sq = sqrt(rnd());
                 float nu = 1.0 - sq;
                 float nv = rnd() * sq;
                 float nw = 1.0 - nu - nv;
 
-                vec3 nee_pos    = nee_light.v0_area.xyz * nu + nee_light.v1.xyz * nv + nee_light.v2.xyz * nw;
-                vec3 nee_normal = normalize(cross(nee_light.v1.xyz - nee_light.v0_area.xyz, nee_light.v2.xyz - nee_light.v0_area.xyz));
+                vec3 nee_pos    = nwv0 * nu + nwv1 * nv + nwv2 * nw;
+                vec3 nee_normal = normalize(cross(nwv1 - nwv0, nwv2 - nwv0));
+                float nee_area  = 0.5 * length(cross(nwv1 - nwv0, nwv2 - nwv0));
 
                 vec3 to_light = nee_pos - sample_pos;
                 float nee_dist = max(length(to_light), 0.0001);
@@ -316,7 +349,6 @@ void main() {
                     if (prd.dist < 0.0) {
                         // Same diffuse-only NEE convention as the existing random-walk NEE:
                         // f_r = albedo / π, no (1-metallic) factor to match the final-pass formula.
-                        float nee_area   = nee_light.v0_area.w;
                         float nee_pdf_sa = (nee_dist * nee_dist) / max(nee_cos_light * nee_area * float(nee_num_lights), 0.0001);
                         sample_radiance += (nee_light.emission.rgb * x2_albedo * nee_cos_surf) / (nee_pdf_sa * 3.14159);
                     }

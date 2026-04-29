@@ -124,7 +124,7 @@ void main() {
                 continue;
             }
 
-            uint num_lights = emissive_triangles.length();
+            uint num_lights = emissive_indirection.length();
             if (num_lights > 0 && bounce < SHADOW_BOUNCES) {
 
                 // SPATIAL REUSE (First Rough Surface)
@@ -135,7 +135,9 @@ void main() {
                     Reservoir spatial_r = Reservoir(vec3(0), 0.0, vec3(0), 0.0, 0u, 0.0, 0u, 0.0);
 
                     if (center_r.W > 0.0 && center_r.light_idx < num_lights) {
-                        emissive_triangle_t center_light = emissive_triangles[center_r.light_idx];
+                        center_r.light_idx = min(center_r.light_idx, num_lights - 1);
+                        emissive_indirection_entry_t center_entry = emissive_indirection[center_r.light_idx];
+                        emissive_triangle_t center_light = emissive_triangles[center_entry.blas_tri_index];
                         vec3 f_y_center = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, center_light, center_r.light_pos, center_r.light_normal);
                         float p_hat_center = max(f_y_center.r, max(f_y_center.g, f_y_center.b));
                         merge_reservoirs(spatial_r, center_r, p_hat_center, rnd());
@@ -162,7 +164,9 @@ void main() {
                         neighbor_r.W = min(neighbor_r.W, 20.0);
                         neighbor_r.M = min(neighbor_r.M, 10.0);
                         if (neighbor_r.W > 0.0 && neighbor_r.light_idx < num_lights) {
-                            emissive_triangle_t neighbor_light = emissive_triangles[neighbor_r.light_idx];
+                            neighbor_r.light_idx = min(neighbor_r.light_idx, num_lights - 1);
+                            emissive_indirection_entry_t neighbor_entry = emissive_indirection[neighbor_r.light_idx];
+                            emissive_triangle_t neighbor_light = emissive_triangles[neighbor_entry.blas_tri_index];
                             vec3 f_y_neighbor = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, neighbor_light, neighbor_r.light_pos, neighbor_r.light_normal);
                             float p_hat_neighbor = max(f_y_neighbor.r, max(f_y_neighbor.g, f_y_neighbor.b));
                             merge_reservoirs(spatial_r, neighbor_r, p_hat_neighbor, rnd());
@@ -170,7 +174,8 @@ void main() {
                     }
 
                     if (spatial_r.w_sum > 0.0) {
-                        emissive_triangle_t winner = emissive_triangles[spatial_r.light_idx];
+                        emissive_indirection_entry_t winner_entry = emissive_indirection[spatial_r.light_idx];
+                        emissive_triangle_t winner = emissive_triangles[winner_entry.blas_tri_index];
                         vec3 f_y_winner = eval_unshadowed_light(hitPos, hit_normal, V_view, hit_albedo, roughness, metallic, winner, spatial_r.light_pos, spatial_r.light_normal);
                         float p_hat_winner = max(f_y_winner.r, max(f_y_winner.g, f_y_winner.b));
                         spatial_r.W = spatial_r.w_sum / max(spatial_r.M * p_hat_winner, 1e-3);
@@ -283,7 +288,25 @@ void main() {
                 // STANDARD NEE (Rough Indirect Bounces)
                 else if (restir_evaluated && roughness > 0.2) {
                     uint light_idx = min(uint(rnd() * num_lights), num_lights - 1);
-                    emissive_triangle_t light = emissive_triangles[light_idx];
+                    emissive_indirection_entry_t entry = emissive_indirection[light_idx];
+                    emissive_triangle_t light = emissive_triangles[entry.blas_tri_index];
+                    entity_transform_t xform = entity_transforms[entry.entity_id];
+
+                    // Transform vertices from local space to world space
+                    vec3 wv0 = vec3(dot(xform.rows[0], vec4(light.v0.xyz, 1.0)),
+                                    dot(xform.rows[1], vec4(light.v0.xyz, 1.0)),
+                                    dot(xform.rows[2], vec4(light.v0.xyz, 1.0)));
+                    vec3 wv1 = vec3(dot(xform.rows[0], vec4(light.v1.xyz, 1.0)),
+                                    dot(xform.rows[1], vec4(light.v1.xyz, 1.0)),
+                                    dot(xform.rows[2], vec4(light.v1.xyz, 1.0)));
+                    vec3 wv2 = vec3(dot(xform.rows[0], vec4(light.v2.xyz, 1.0)),
+                                    dot(xform.rows[1], vec4(light.v2.xyz, 1.0)),
+                                    dot(xform.rows[2], vec4(light.v2.xyz, 1.0)));
+
+                    // Compute world-space area
+                    vec3 edge1 = wv1 - wv0;
+                    vec3 edge2 = wv2 - wv0;
+                    float light_area = 0.5 * length(cross(edge1, edge2));
 
                     float r1_nee = rnd();
                     float r2_nee = rnd();
@@ -292,8 +315,8 @@ void main() {
                     float v = r2_nee * sqr1;
                     float w = 1.0 - u - v;
 
-                    vec3 light_pos = light.v0_area.xyz * u + light.v1.xyz * v + light.v2.xyz * w;
-                    vec3 light_normal = normalize(cross(light.v1.xyz - light.v0_area.xyz, light.v2.xyz - light.v0_area.xyz));
+                    vec3 light_pos = wv0 * u + wv1 * v + wv2 * w;
+                    vec3 light_normal = normalize(cross(wv1 - wv0, wv2 - wv0));
 
                     vec3 shadow_ray_dir = light_pos - hitPos;
                     float light_dist = length(shadow_ray_dir);
@@ -310,7 +333,6 @@ void main() {
                         traceRayEXT(tlas, shadow_ray_flags, 0xFF, 0, 0, 0, hitPos, 0.001, shadow_ray_dir, light_dist - 0.001, 0);
 
                         if (prd.dist < 0.0) {
-                            float light_area = light.v0_area.w;
                             float solid_angle_pdf = (light_dist * light_dist) / max(cos_theta_light * light_area * float(num_lights), 1e-4);
                             vec3 nee_contrib = (light.emission.rgb * hit_albedo * throughput * cos_theta_surface) / (solid_angle_pdf * 3.14159);
                             radiance += min(nee_contrib, vec3(5.0));

@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::rc::Rc;
 
 use ash::vk;
-
+use log::info;
+use crate::vulkan_abstraction::Buffer;
 use crate::{error::*, vulkan_abstraction};
-
 // Resources:
 // - https://github.com/adrien-ben/vulkan-examples-rs
 // - https://nvpro-samples.github.io/vk_raytracing_tutorial_KHR/
@@ -15,10 +16,14 @@ pub struct TLAS {
 }
 
 impl TLAS {
-    pub fn new(core: Rc<vulkan_abstraction::Core>, blas_instances: &[vulkan_abstraction::BlasInstance]) -> SrResult<Self> {
-        let instances_buffer = Self::make_instances_buffer(Rc::clone(&core), blas_instances)?;
+    pub fn new(
+        core: Rc<vulkan_abstraction::Core>,
+        blas_instances: &[vulkan_abstraction::BlasInstance],
+        instances_buffer: &mut impl Buffer,
+    ) -> SrResult<Self> {
+        Self::insert_in_instances_buffer(Rc::clone(&core), blas_instances, instances_buffer)?;
 
-        let geometry = Self::make_geometry(&instances_buffer);
+        let geometry = Self::make_geometry(instances_buffer);
 
         let build_range_info = Self::make_build_range_info(blas_instances.len() as u32);
 
@@ -28,6 +33,7 @@ impl TLAS {
             &[build_range_info],
             &[geometry],
             true,
+            false,
         )?;
 
         Ok(Self { tlas })
@@ -45,10 +51,17 @@ impl TLAS {
     /// - Change one or more transform matrices
     /// - switch one BLAS instance for another, possibly to switch LODs
     #[allow(unused)]
-    pub fn update(&mut self, blas_instances: &[vulkan_abstraction::BlasInstance]) -> SrResult<()> {
-        let instances_buffer = Self::make_instances_buffer(Rc::clone(self.tlas.core()), blas_instances)?;
+    pub fn update(
+        &mut self,
+        blas_instances: &[vulkan_abstraction::BlasInstance],
+        instances_buffer: &mut impl Buffer,
+    ) -> SrResult<()> {
+        if !self.tlas.allow_update {
+            return SrResult::Err(SrError::new_custom("The structure is not updatable".to_string()));
+        }
+        Self::insert_in_instances_buffer(Rc::clone(self.tlas.core()), blas_instances, instances_buffer)?;
 
-        let geometry = Self::make_geometry(&instances_buffer);
+        let geometry = Self::make_geometry(instances_buffer);
 
         let build_range_info = Self::make_build_range_info(blas_instances.len() as u32);
 
@@ -58,22 +71,142 @@ impl TLAS {
     }
 
     #[allow(unused)]
-    pub fn rebuild(&mut self, blas_instances: &[vulkan_abstraction::BlasInstance]) -> SrResult<()> {
-        let instances_buffer = Self::make_instances_buffer(Rc::clone(self.tlas.core()), blas_instances)?;
+    pub fn rebuild(
+        &mut self,
+        blas_instances: &[vulkan_abstraction::BlasInstance],
+        instances_buffer: &mut impl Buffer,
+    ) -> SrResult<()> {
+        Self::insert_in_instances_buffer(Rc::clone(self.tlas.core()), blas_instances, instances_buffer)?;
 
-        let geometry = Self::make_geometry(&instances_buffer);
+        let geometry = Self::make_geometry(instances_buffer);
 
         let build_range_info = Self::make_build_range_info(blas_instances.len() as u32);
 
-        self.tlas.rebuild(&[build_range_info], &[geometry])?;
+        self.tlas.rebuild(&[build_range_info], &[geometry], false)?;
 
         Ok(())
     }
 
-    fn make_instances_buffer(
+    #[allow(unused)]
+    pub fn rebuild_from_entities( //TODO this lacks the actual syncronization
+        &mut self,
+        entities: &HashMap<u64, vulkan_abstraction::Entity>,
+        blases : & HashMap<u64, vulkan_abstraction::BLAS>,
+        instances_buffer: &mut impl Buffer,
+    ) -> SrResult<()> {
+        Self::insert_in_instances_buffer_from_entity(Rc::clone(self.tlas.core()), entities ,blases, instances_buffer)?;
+
+        let geometry = Self::make_geometry(instances_buffer);
+
+        let build_range_info = Self::make_build_range_info(entities.len() as u32);
+
+        self.tlas.rebuild(&[build_range_info], &[geometry], false)?;
+
+        Ok(())
+    }
+
+
+
+    pub fn new_from_entities( //TODO the instance buffer length and actual use since it is longer than needed 
+        core: Rc<vulkan_abstraction::Core>,
+        entities: &HashMap<u64, vulkan_abstraction::Entity>,
+        blases : & HashMap<u64, vulkan_abstraction::BLAS>,
+        instances_buffer: &mut impl Buffer,
+    ) -> SrResult<Self> {
+        Self::insert_in_instances_buffer_from_entity(Rc::clone(&core), entities, blases, instances_buffer)?;
+
+        let geometry = Self::make_geometry(instances_buffer);
+
+        let build_range_info = Self::make_build_range_info(entities.len() as u32);
+
+        let tlas = vulkan_abstraction::AccelerationStructure::new(
+            core,
+            vk::AccelerationStructureTypeKHR::TOP_LEVEL,
+            &[build_range_info],
+            &[geometry],
+            true,
+            false,
+        )?;
+
+        Ok(Self { tlas })
+    }
+
+    #[allow(unused)]
+    pub fn update_from_entities(
+        &mut self, 
+        entities: &HashMap<u64, vulkan_abstraction::Entity>,
+        blases : & HashMap<u64, vulkan_abstraction::BLAS>,
+        instances_buffer: &mut impl Buffer,
+    ) -> SrResult<()> {
+        if !self.tlas.allow_update {
+            return SrResult::Err(SrError::new_custom("The structure is not updatable".to_string()));
+        }
+        Self::insert_in_instances_buffer_from_entity(Rc::clone(self.tlas.core()), entities ,blases, instances_buffer)?;
+
+        let geometry = Self::make_geometry(instances_buffer);
+
+        let build_range_info = Self::make_build_range_info(entities.len() as u32);
+
+        self.tlas.update(&[build_range_info], &[geometry])?;
+
+        Ok(())
+    }
+
+
+    fn insert_in_instances_buffer_from_entity(
+        core: Rc<vulkan_abstraction::Core>,
+        entities: &HashMap<u64, vulkan_abstraction::Entity>,
+        blases : & HashMap<u64, vulkan_abstraction::BLAS>,
+        instances_buffer: &mut impl Buffer,
+    ) -> SrResult<()> {
+        let blas_instances: Vec<vk::AccelerationStructureInstanceKHR> = entities
+            .iter()
+            .map(|(_id , entity)| {
+                vk::AccelerationStructureInstanceKHR {
+                    transform: entity.transform,
+                    instance_custom_index_and_mask: vk::Packed24_8::new(entity.blas_instance_index as u32, 0xFF), // mask = 0 (don't know what actually does, NV tutorial writes "Only be hit if rayMask & instance.mask != 0")
+                    instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(
+                        0, // hit_group_offset = 0, same hit group for the whole scene
+                        vk::GeometryInstanceFlagsKHR::TRIANGLE_FACING_CULL_DISABLE.as_raw() as u8, // disable face culling for semplicity
+                    ),
+                    acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
+                        device_handle: unsafe {
+                            core.acceleration_structure_device()
+                                .get_acceleration_structure_device_address(
+                                    &vk::AccelerationStructureDeviceAddressInfoKHR::default()
+                                        .acceleration_structure(blases.get(&entity.blas_index).unwrap().inner()),
+                                )
+                        },
+                    },
+                }
+
+            })
+            .collect();
+     
+
+        let mapped_memory = instances_buffer.raw_mut().map_mut::<vk::AccelerationStructureInstanceKHR>()?;
+
+        for (i, instance) in blas_instances.iter().enumerate() {
+            mapped_memory[i] = vk::AccelerationStructureInstanceKHR {
+                transform: instance.transform,
+                instance_custom_index_and_mask: instance.instance_custom_index_and_mask,
+                instance_shader_binding_table_record_offset_and_flags: instance
+                    .instance_shader_binding_table_record_offset_and_flags,
+                acceleration_structure_reference: instance.acceleration_structure_reference,
+            };
+        }
+
+        Ok(())
+    }
+    
+    
+
+
+    fn insert_in_instances_buffer<'a>(
         core: Rc<vulkan_abstraction::Core>,
         blas_instances: &[vulkan_abstraction::BlasInstance],
-    ) -> SrResult<vulkan_abstraction::Buffer> {
+        instances_buffer: &mut impl Buffer,
+    ) -> SrResult<()> {
         let blas_instances: Vec<vk::AccelerationStructureInstanceKHR> = blas_instances
             .iter()
             .map(|blas_instance| {
@@ -94,22 +227,36 @@ impl TLAS {
                         },
                     },
                 }
+
             })
             .collect();
 
         // buffer to hold the instances
-        let instances_buffer = vulkan_abstraction::Buffer::new_from_data(
-            core,
-            &blas_instances,
-            gpu_allocator::MemoryLocation::GpuOnly,
-            vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
-            "TLAS instances buffer",
-        )?;
+        // let instances_buffer = vulkan_abstraction::Buffer::new_from_data(
+        //     core,
+        //     &blas_instances,
+        //     gpu_allocator::MemoryLocation::CpuToGpu,
+        //     vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS | vk::BufferUsageFlags::ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_KHR,
+        //     "TLAS instances buffer",
+        // )?;
 
-        Ok(instances_buffer)
+        let mapped_memory = instances_buffer.raw_mut().map_mut::<vk::AccelerationStructureInstanceKHR>()?;
+
+        // 2. Scrivi i dati sovrascrivendo quelli vecchi
+        for (i, instance) in blas_instances.iter().enumerate() {
+            mapped_memory[i] = vk::AccelerationStructureInstanceKHR {
+                transform: instance.transform,
+                instance_custom_index_and_mask: instance.instance_custom_index_and_mask,
+                instance_shader_binding_table_record_offset_and_flags: instance
+                    .instance_shader_binding_table_record_offset_and_flags,
+                acceleration_structure_reference: instance.acceleration_structure_reference,
+            };
+        }
+
+        Ok(())
     }
 
-    fn make_geometry(instances_buffer: &vulkan_abstraction::Buffer) -> vk::AccelerationStructureGeometryKHR<'_> {
+    fn make_geometry(instances_buffer: &impl Buffer) -> vk::AccelerationStructureGeometryKHR<'_> {
         vk::AccelerationStructureGeometryKHR::default()
             .geometry_type(vk::GeometryTypeKHR::INSTANCES)
             .flags(vk::GeometryFlagsKHR::empty())

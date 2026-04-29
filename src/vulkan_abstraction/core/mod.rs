@@ -5,23 +5,32 @@ pub use device::*;
 use gpu_allocator::vulkan::{Allocator, AllocatorCreateDesc};
 pub use instance::*;
 
+use crate::vulkan_abstraction;
+use crate::vulkan_abstraction::Queue;
+use crate::{CreateSurfaceFn, error::*};
+use ash::vk::Semaphore;
+use ash::{khr, vk};
+use parking_lot::lock_api::MutexGuard;
+use parking_lot::{Mutex, RawMutex};
 use std::cell::{Ref, RefCell, RefMut};
 use std::ffi::CStr;
 use std::rc::Rc;
 
-use crate::vulkan_abstraction;
-use crate::{CreateSurfaceFn, error::*};
-use ash::{khr, vk};
-
 #[rustfmt::skip]
 #[allow(unused)]
-pub struct Core {
+pub struct Core { //TODO core is completely single thread
     // Note: do not reorder the fields in this struct: they will be dropped in the same order they are declared
+    pub absolute_frame_count: RefCell<usize>,
+
     acceleration_structure_device: khr::acceleration_structure::Device,
     ray_tracing_pipeline_device: khr::ray_tracing_pipeline::Device,
     //queue needs mutability for .present()
-    queue: RefCell<vulkan_abstraction::Queue>,
-    cmd_pool: vulkan_abstraction::CmdPool,
+    graphics_queue: Mutex<vulkan_abstraction::Queue>,
+    transfer_queue: Mutex<vulkan_abstraction::Queue>,
+    graphics_cmd_pool: vulkan_abstraction::CmdPool,
+    transfer_cmd_pool: vulkan_abstraction::CmdPool,
+
+    transfer_semaphores: RefCell<Vec<vk::Semaphore>>,
 
     allocator: RefCell<Allocator>,
 
@@ -91,20 +100,49 @@ impl Core {
         let acceleration_structure_device = khr::acceleration_structure::Device::new(&instance.inner(), &device.inner());
         let ray_tracing_pipeline_device = khr::ray_tracing_pipeline::Device::new(&instance.inner(), &device.inner());
 
-        let queue = vulkan_abstraction::Queue::new(Rc::clone(&device), 0)?;
+        let graphics_queue = vulkan_abstraction::Queue::new(Rc::clone(&device), 0, device.graphics_queue_family_index())?;
 
-        let cmd_pool = vulkan_abstraction::CmdPool::new(Rc::clone(&device), vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)?;
+        let graphics_family = device.graphics_queue_family_index();
+        let (transfer_queue, transfer_cmd_pool) = if let Some(transfer_family) = device.transfer_queue_family_index() {
+            // Path A: dGPU (Dedicated Transfer Hardware)
+            let queue = vulkan_abstraction::Queue::new(Rc::clone(&device), 0, transfer_family)?;
+            let pool = vulkan_abstraction::CmdPool::new(
+                Rc::clone(&device),
+                transfer_family,
+                vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+            )?;
+            (queue, pool)
+        } else {
+            // Path B: iGPU Fallback (Aliasing the Graphics Queue)
+            let queue = vulkan_abstraction::Queue::new(Rc::clone(&device), 0, graphics_family)?;
+            let pool = vulkan_abstraction::CmdPool::new(
+                Rc::clone(&device),
+                graphics_family,
+                vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+            )?;
+            (queue, pool)
+        };
+
+        let graphics_cmd_pool = vulkan_abstraction::CmdPool::new(
+            Rc::clone(&device),
+            graphics_family,
+            vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+        )?;
 
         Ok((
             Self {
+                absolute_frame_count: RefCell::new(0),
                 entry,
                 instance,
                 device,
                 allocator: RefCell::new(allocator),
                 acceleration_structure_device,
                 ray_tracing_pipeline_device,
-                queue: RefCell::new(queue),
-                cmd_pool,
+                graphics_queue: parking_lot::Mutex::new(graphics_queue),
+                transfer_queue: parking_lot::Mutex::new(transfer_queue),
+                graphics_cmd_pool,
+                transfer_cmd_pool,
+                transfer_semaphores: RefCell::new(vec![]),
             },
             surface_support.map(|(s, _)| s),
         ))
@@ -129,19 +167,63 @@ impl Core {
     pub fn rt_pipeline_device(&self) -> &khr::ray_tracing_pipeline::Device {
         &self.ray_tracing_pipeline_device
     }
-    pub fn queue(&self) -> Ref<'_, vulkan_abstraction::Queue> {
-        self.queue.borrow()
+    pub fn graphics_queue(&self) -> MutexGuard<'_, RawMutex, Queue> {
+        self.graphics_queue.lock()
     }
-    pub fn queue_mut(&self) -> RefMut<'_, vulkan_abstraction::Queue> {
-        self.queue.borrow_mut()
+
+    pub fn transfer_queue(&self) -> MutexGuard<'_, RawMutex, Queue> {
+        self.transfer_queue.lock()
     }
+
     pub fn allocator(&self) -> Ref<'_, Allocator> {
         self.allocator.borrow()
     }
     pub fn allocator_mut(&self) -> RefMut<'_, Allocator> {
         self.allocator.borrow_mut()
     }
-    pub fn cmd_pool(&self) -> &vulkan_abstraction::CmdPool {
-        &self.cmd_pool
+
+    pub fn transfer_semaphores(&self) -> Ref<'_, Vec<Semaphore>> {
+        self.transfer_semaphores.borrow()
+    }
+    pub fn transfer_semaphores_mut(&self) -> RefMut<'_, Vec<Semaphore>> {
+        self.transfer_semaphores.borrow_mut()
+    }
+    pub fn graphics_cmd_pool(&self) -> &vulkan_abstraction::CmdPool {
+        &self.graphics_cmd_pool
+    }
+
+    pub fn transfer_cmd_pool(&self) -> &vulkan_abstraction::CmdPool {
+        &self.transfer_cmd_pool
+    }
+
+    /// Invia un command buffer alla coda di trasferimento.
+    /// Ritorna un Semaforo (che la coda grafica dovrà aspettare)
+    /// e un Fence (che la CPU può opzionalmente aspettare).
+    pub fn submit_transfer_commands(&self, transfer_cmd_buffer: vk::CommandBuffer) -> SrResult<(vk::Semaphore, vk::Fence)> {
+        let device = self.device.inner();
+
+        // 1. Crea il semaforo (Signal per la Graphics Queue)
+        let semaphore_info = vk::SemaphoreCreateInfo::default();
+        let transfer_complete_semaphore = unsafe { device.create_semaphore(&semaphore_info, None) }?;
+
+        // 2. Crea il fence (Signal per la CPU)
+        let fence_info = vk::FenceCreateInfo::default();
+        let transfer_fence = unsafe { device.create_fence(&fence_info, None) }?;
+
+        // 3. Prepara la sottomissione
+        let command_buffers = [transfer_cmd_buffer];
+        let signal_semaphores = [transfer_complete_semaphore];
+
+        let submit_info = vk::SubmitInfo::default()
+            .command_buffers(&command_buffers)
+            .signal_semaphores(&signal_semaphores);
+
+        // 4. Invia alla Transfer Queue
+        unsafe {
+            let queue = self.transfer_queue.lock();
+            device.queue_submit(queue.inner(), &[submit_info], transfer_fence)?;
+        }
+
+        Ok((transfer_complete_semaphore, transfer_fence))
     }
 }

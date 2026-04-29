@@ -66,10 +66,19 @@ struct mesh_info_t {
 };
 
 struct emissive_triangle_t {
-    vec4 v0_area;    // xyz = v0, w = area
-    vec4 v1;         // xyz = v1, w = pad
-    vec4 v2;         // xyz = v2, w = pad
+    vec4 v0;         // xyz = local-space v0, w = pad
+    vec4 v1;         // xyz = local-space v1, w = pad
+    vec4 v2;         // xyz = local-space v2, w = pad
     vec4 emission;   // rgb = color * strength, w = pad
+};
+
+struct emissive_indirection_entry_t {
+    uint blas_tri_index;
+    uint entity_id;  // entity arena slot — indexes into entity_transforms
+};
+
+struct entity_transform_t {
+    vec4 rows[3]; // 3x4 row-major transform (same layout as VkTransformMatrixKHR)
 };
 
 layout(push_constant) uniform push_constant_t {
@@ -91,6 +100,12 @@ layout(set = 0, binding = 4) uniform sampler2D texture_samplers[1024];
 
 layout(set = 0, binding = 9) readonly buffer EmissiveTrianglesBuffer {
     emissive_triangle_t emissive_triangles[];
+};
+layout(set = 0, binding = 11) readonly buffer EmissiveIndirectionBuffer {
+    emissive_indirection_entry_t emissive_indirection[];
+};
+layout(set = 0, binding = 12) readonly buffer EntityTransformsBuffer {
+    entity_transform_t entity_transforms[];
 };
 
 #endif

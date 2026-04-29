@@ -3,18 +3,22 @@ use std::rc::Rc;
 use crate::{error::*, vulkan_abstraction};
 use ash::vk;
 
-pub const MAX_FRAMES_IN_FLIGHT: usize = 1;
-
 pub struct Queue {
     queue: vk::Queue,
+    queue_family_index: u32,
+    queue_index: u32,
 
     device: Rc<vulkan_abstraction::Device>,
 }
 impl Queue {
-    pub fn new(device: Rc<vulkan_abstraction::Device>, q_index: u32) -> SrResult<Self> {
-        let queue = unsafe { device.inner().get_device_queue(device.queue_family_index(), q_index) };
-
-        Ok(Self { queue, device })
+    pub fn new(device: Rc<vulkan_abstraction::Device>, queue_index: u32, queue_family_index: u32) -> SrResult<Self> {
+        let queue = unsafe { device.inner().get_device_queue(queue_family_index, queue_index) };
+        Ok(Self {
+            queue,
+            queue_family_index,
+            queue_index,
+            device,
+        })
     }
 
     pub fn wait_idle(&self) -> SrResult<()> {
@@ -63,6 +67,14 @@ impl Queue {
         fence.wait()?;
 
         Ok(())
+    }
+
+    pub fn queue_family_index(&self) -> u32 {
+        self.queue_family_index
+    }
+
+    pub fn queue_index(&self) -> u32 {
+        self.queue_index
     }
 
     #[allow(dead_code)]

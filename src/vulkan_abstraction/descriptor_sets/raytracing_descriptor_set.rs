@@ -1,6 +1,6 @@
 use crate::error::SrResult;
 use crate::vulkan_abstraction;
-use crate::vulkan_abstraction::TLAS;
+use crate::vulkan_abstraction::{Buffer, TLAS};
 use ash::vk;
 use std::rc::Rc;
 
@@ -22,11 +22,13 @@ impl RaytracingDescriptorSetLayout {
     pub const MOTION_VECTOR_BINDING: u32 = 8;
     pub const EMISSIVE_TRIANGLES_BINDING: u32 = 9;
     pub const BLUE_NOISE_BINDING: u32 = 10;
-    pub const RESERVOIR_BUFFERS_BINDING: u32 = 11;
-    pub const RESERVOIR_GI_BUFFERS_BINDING: u32 = 13;
-    pub const NUMBER_OF_BINDINGS: usize = 13;
+    pub const EMISSIVE_INDIRECTION_BINDING: u32 = 11;
+    pub const ENTITY_TRANSFORMS_BINDING: u32 = 12;
+    pub const RESERVOIR_BUFFERS_BINDING: u32 = 13;
+    pub const RESERVOIR_GI_BUFFERS_BINDING: u32 = 14;
+    pub const NUMBER_OF_BINDINGS: usize = 15;
 
-    pub const NUMBER_OF_SAMPLERS: u32 = vulkan_abstraction::ShaderDataBuffers::NUMBER_OF_SAMPLERS as u32;
+    pub const NUMBER_OF_SAMPLERS: u32 = vulkan_abstraction::ResourceManager::NUMBER_OF_SAMPLERS as u32;
 
     pub fn new(core: Rc<vulkan_abstraction::Core>) -> SrResult<Self> {
         let device = core.device().inner();
@@ -96,6 +98,18 @@ impl RaytracingDescriptorSetLayout {
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+            // Emissive indirection buffer (dense NEE sampling entries)
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::EMISSIVE_INDIRECTION_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
+            // Entity transforms buffer (indexed by arena slot)
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(Self::ENTITY_TRANSFORMS_BINDING)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR),
             //ping pong buffers for ReSTIR, accessed as reservoirs[frame_parity] on the shader side
             vk::DescriptorSetLayoutBinding::default()
                 .binding(Self::RESERVOIR_BUFFERS_BINDING)
@@ -155,9 +169,9 @@ impl RaytracingDescriptorSets {
         motion_vector_image: &vulkan_abstraction::Image,
         blue_noise_image: &vulkan_abstraction::Image,
         blue_noise_sampler: vk::Sampler,
-        reservoir_buffers: &[vulkan_abstraction::Buffer; 2],
-        reservoir_gi_buffers: &[vulkan_abstraction::Buffer; 2],
-        shader_data: &vulkan_abstraction::ShaderDataBuffers,
+        reservoir_buffers: &[vulkan_abstraction::GpuOnlyBuffer; 2],
+        reservoir_gi_buffers: &[vulkan_abstraction::GpuOnlyBuffer; 2],
+        shader_data: &vulkan_abstraction::ResourceManager,
     ) -> SrResult<Self> {
         let device = core.device().inner();
         let descriptor_pool_sizes = [
@@ -171,9 +185,8 @@ impl RaytracingDescriptorSets {
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(1),
             vk::DescriptorPoolSize::default()
-                //Meshes info + Emissive triangles + 2 ping pong Reservoir buffers + 2 ping pong GI Reservoir buffers
-                .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(6),
+                .ty(vk::DescriptorType::STORAGE_BUFFER) //Meshes info + Emissive triangles+ Indirection + Entity transforms + 2 ping pong Reservoir buffers  + 2 ping pong GI Reservoir buffers
+                .descriptor_count(8),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(RaytracingDescriptorSetLayout::NUMBER_OF_SAMPLERS + 1), //The +1 is for the blue noise texture
@@ -302,6 +315,30 @@ impl RaytracingDescriptorSets {
                 .buffer_info(&emissive_buffer_infos)
                 .dst_set(descriptor_sets[0])
                 .dst_binding(RaytracingDescriptorSetLayout::EMISSIVE_TRIANGLES_BINDING),
+        );
+
+        // write emissive indirection buffer
+        let indirection_buffer_infos = [vk::DescriptorBufferInfo::default()
+            .buffer(shader_data.get_emissive_indirection_buffer())
+            .range(vk::WHOLE_SIZE)];
+        push_write(
+            vk::WriteDescriptorSet::default()
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&indirection_buffer_infos)
+                .dst_set(descriptor_sets[0])
+                .dst_binding(RaytracingDescriptorSetLayout::EMISSIVE_INDIRECTION_BINDING),
+        );
+
+        // write entity transforms buffer
+        let entity_transforms_infos = [vk::DescriptorBufferInfo::default()
+            .buffer(shader_data.get_entity_transforms_buffer())
+            .range(vk::WHOLE_SIZE)];
+        push_write(
+            vk::WriteDescriptorSet::default()
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .buffer_info(&entity_transforms_infos)
+                .dst_set(descriptor_sets[0])
+                .dst_binding(RaytracingDescriptorSetLayout::ENTITY_TRANSFORMS_BINDING),
         );
 
         // write samplers to descriptor set

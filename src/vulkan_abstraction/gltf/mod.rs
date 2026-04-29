@@ -333,8 +333,7 @@ impl Gltf {
                         indices
                     };
 
-                    let index_buffer =
-                        vulkan_abstraction::IndexBuffer::new_for_blas_from_data::<u32>(Rc::clone(&self.core), &indices)?;
+                    let index_buffer = vulkan_abstraction::IndexBuffer::new_for_blas_from_data(Rc::clone(&self.core), &indices)?;
 
                     index_buffer
                 };
@@ -356,7 +355,6 @@ impl Gltf {
 
                 primitive_data_map.insert(primitive_unique_key, primitive_data);
             }
-
             primitives.push(vulkan_abstraction::gltf::Primitive {
                 unique_key: primitive_unique_key,
                 material,
