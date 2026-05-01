@@ -3,6 +3,7 @@ use std::{backtrace::BacktraceStatus, fmt::Display};
 
 pub type SrResult<T> = std::result::Result<T, SrError>;
 
+
 #[derive(Debug)]
 pub enum ErrorSource {
     Vulkan(vk::Result),

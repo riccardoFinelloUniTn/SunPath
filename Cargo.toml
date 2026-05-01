@@ -17,9 +17,13 @@ gltf = { version = "1.4.1", features = ["KHR_lights_punctual", "KHR_materials_em
 log = { version = "0.4.28", features = ["release_max_level_warn"] }
 gpu-allocator = "0.28.0"
 bytemuck = "1.24.0"
-parking_lot = "0.12.5"
 image = "0.25.8"
+parking_lot = "0.12.5"
+vk-sync-fork = "0.5.2"
 rand = "0.10.1"
+slotmap = "1.1.1"
+rspirv-reflect = "0.9.0"
+derive_builder = "0.20.2"
 #na = "0.32.2"
 
 
@@ -27,7 +31,7 @@ rand = "0.10.1"
 shaderc = "0.10.1"
 
 [dev-dependencies]
-winit = { version = "0.30.13", features = ["rwh_05" , "wayland"] } #window example
+winit = { version = "0.30.9", features = ["rwh_05"] } #window example
 log4rs = "1.4.0" #logging for examples
 image = "0.25.8" #png example
 

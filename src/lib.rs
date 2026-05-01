@@ -3,6 +3,7 @@ pub mod error;
 pub mod scene;
 pub mod utils;
 pub mod vulkan_abstraction;
+pub mod render_graph;
 
 pub use camera::*;
 use error::*;
