@@ -1,18 +1,24 @@
 use crate::error::SrResult;
-use crate::vulkan_abstraction::{AccelerationStructure, Buffer, CmdBuffer, Core, Image, RawBuffer};
+use crate::vulkan_abstraction::{AccelerationStructure, Buffer, CmdBuffer, Core, Image, RawBuffer, RaytracingDescriptorSets};
 use ash::vk;
-use ash::vk::{CommandBuffer};
-use std::collections::HashMap;
-use std::sync::Arc;
+use ash::vk::CommandBuffer;
 use derive_builder::Builder;
+use enum_as_inner::EnumAsInner;
+use std::any::Any;
+use std::collections::HashMap;
+use std::marker::PhantomData;
+use std::path::PathBuf;
+use std::sync::Arc;
 use vk_sync_fork as vk_sync;
 
-trait Resource {
+pub trait Resource {
     type Desc: ResourceDesc;
     fn borrow_resource(res: &AnyRenderResource) -> &Self;
 }
-trait ResourceDesc {}
-
+pub trait ResourceDesc: Clone + std::fmt::Debug + Into<GraphResourceDesc> {
+    type Resource: Resource;
+}
+#[derive(Clone, Copy)]
 pub(crate) struct RawResourceHandle {
     pub(crate) id: u32,
     pub(crate) version: u32,
@@ -25,39 +31,30 @@ pub enum AnyRenderResource {
     ImportedBuffer(Arc<dyn Buffer>),
     ImportedRayTracingAcceleration(Arc<AccelerationStructure>),
 }
-#[derive(Clone,Copy)]
-struct Handle {}
+pub struct Handle<ResourceType: Resource> {
+    //TODO an handle should be tied to the lifetime of the setup phase of the graph
+    pub(crate) raw: RawResourceHandle,
+    pub(crate) desc: <ResourceType as Resource>::Desc,
+    pub(crate) marker: PhantomData<ResourceType>,
+}
 
 type DynRenderFn = dyn FnOnce(&mut CommandBuffer, &mut TransientResources) -> SrResult<()>; //TODO TransientResources here is intended to be a way to dereference the resources,but this implies it handles also external ones
-#[derive(Clone,Copy)]
-pub struct ResourceRef {
-    handle: Handle,
-    access_type : PassResourceAccessType
+
+struct ResourceRef {
+    pub(crate) raw: RawResourceHandle,
+    pub(crate) usage: PassResourceAccessSyncType,
 }
-#[derive(Builder)]
-#[builder(pattern = "owned")]
+
 pub(crate) struct RenderPass {
-    pub read: Vec<ResourceRef>,
-    pub write: Vec<ResourceRef>,
-    #[builder( setter(strip_option))]
-    pub render_fn: Option<Box<DynRenderFn>>,
-    #[builder(setter(skip))]
-    pub name: String,
-    #[builder(setter(skip))]
+    read: Vec<ResourceRef>,
+    write: Vec<ResourceRef>,
+    render_fn: Option<Box<DynRenderFn>>,
+    name: String,
     idx: usize,
 }
 
-
-
-
 #[allow(dead_code)]
-fn global_barrier(
-    core: &Core,
-    cb: &CmdBuffer,
-    previous_accesses: &[vk_sync::AccessType],
-    next_accesses: &[vk_sync::AccessType],
-) {
-
+fn global_barrier(core: &Core, cb: &CmdBuffer, previous_accesses: &[vk_sync::AccessType], next_accesses: &[vk_sync::AccessType]) {
     vk_sync::cmd::pipeline_barrier(
         core.device().inner(),
         cb.inner(),
@@ -70,14 +67,13 @@ fn global_barrier(
     );
 }
 
-
 pub struct TransientResources {
     //TODO this struct needs to be emptied after the next frame creation so that resources can be reused
 }
 
 #[derive(Clone)]
 
-pub(crate) enum GraphResourceImportInfo {
+pub enum GraphResourceImportInfo {
     Image {
         resource: Arc<Image>,
         access_type: vk_sync::AccessType,
@@ -103,7 +99,7 @@ pub enum GraphResourceDesc {
     Buffer(BufferDesc),
     RaytracingAS(RaytracingASDesc),
 }
-
+#[derive(EnumAsInner)]
 pub enum GraphResourceInfo {
     //this is description of what I need to allocate to satisfy the request pof the render pass
     Created(GraphResourceDesc),
@@ -112,17 +108,41 @@ pub enum GraphResourceInfo {
 
 struct PipelineCache {}
 
-pub(crate) trait RenderGraphState {}
+pub trait RenderGraphState {}
 #[derive(Default)]
 pub(crate) struct Setup {}
 impl RenderGraphState for Setup {}
 
-pub struct RenderGraph<K, State: RenderGraphState> {
+struct RgComputePipeline {
+
     //TODO
+}
+
+struct RgRasterPipeline {
+    //TODO
+}
+
+pub(crate ) enum Shader{
+    //TODO supported shaders, for now glsl
+    Glsl(PathBuf)
+}
+struct RgRaytracingPipeline {
+    raytracing_descriptor_sets: RaytracingDescriptorSets,
+    shader : Shader
+    //TODO
+
+}
+
+pub struct RenderGraph<State: RenderGraphState> {
+    //TODO debug hooks and tools
     passes: Vec<RenderPass>,
     resources: Vec<GraphResourceInfo>,
-    transient_resources: TransientResources,
-    borrowed_resources: HashMap<K, ResourceRef>,
+
+    pub(crate) compute_pipelines: Vec<RgComputePipeline>,
+    pub(crate) raster_pipelines: Vec<RgRasterPipeline>,
+    pub(crate) rt_pipelines: Vec<RgRaytracingPipeline>,
+
+    // transient_resources: TransientResources,
     frame_descriptor_set: vk::DescriptorSet, //for the internal data?
     state_data: State,
 }
@@ -144,37 +164,77 @@ pub struct PassResourceAccessType {
     sync_type: PassResourceAccessSyncType,
 }
 
-
-
 pub(crate) struct Render {}
-impl<K> RenderGraph<K, Setup> {
+impl RenderGraph<Setup> {
     pub fn new() -> SrResult<Self> {
         Ok(RenderGraph {
             passes: vec![],
             resources: vec![],
-            transient_resources: TransientResources {},
-            borrowed_resources: HashMap::default(),
-            frame_descriptor_set: Default::default(),
+            //transient_resources: TransientResources {},
+            //frame_descriptor_set: Default::default(),
+            compute_pipelines: vec![],
+            raster_pipelines: vec![],
+            rt_pipelines: vec![],
             state_data: Setup::default(),
         })
     }
+    pub fn create<Desc: ResourceDesc>(&mut self, desc: Desc) -> Handle<<Desc as ResourceDesc>::Resource>
+    where
+        Desc: TypeEquals<Other = <<Desc as ResourceDesc>::Resource as Resource>::Desc>,
+    {
+        self.create_raw_resource(desc.clone().into());
+        Handle {
+            raw: RawResourceHandle { id: 0, version: 0 },
+            desc: TypeEquals::same(desc),
+            marker: Default::default(),
+        }
+    }
 
-    pub fn create_render_pass(&mut self, name: impl Into<String>)-> RenderPass  {
-        RenderPass{
+    pub fn create_raw_resource(&mut self, resource_desc: GraphResourceDesc) {
+        self.resources.push(GraphResourceInfo::Created(resource_desc));
+    }
+
+    pub fn add_render_pass(&mut self, render_pass_builder: RenderPassBuilder) {
+        let render_pass = render_pass_builder.submit(self);
+        todo!()
+    }
+}
+
+pub struct RenderPassBuilder {
+    render_pass: RenderPass,
+}
+impl RenderPassBuilder {
+    pub fn new(name: impl Into<String>) -> Self {
+        let render_pass = RenderPass {
             read: vec![],
             write: vec![],
             render_fn: None,
             name: name.into(),
             idx: 0,
-        }
+        };
+        Self { render_pass }
     }
 
-    pub fn add_render_pass(&mut self, pass : RenderPass){
-        for written_res  in pass.write.iter(){
-        }
+    fn submit(mut self, render_graph: &mut RenderGraph<Setup>) -> RenderPass {
+        //TODO possible drop trait to submit as well
+        self.render_pass.idx = render_graph.passes.len();
+        self.render_pass
     }
 }
 
 pub struct BuiltRenderGraph {
+    cmd_buffer: CmdBuffer
     //ready to execute
+}
+
+pub trait TypeEquals {
+    type Other;
+    fn same(value: Self) -> Self::Other;
+}
+
+impl<T: Sized> TypeEquals for T {
+    type Other = Self;
+    fn same(value: Self) -> Self::Other {
+        value
+    }
 }

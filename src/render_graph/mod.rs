@@ -1,1 +1,2 @@
-mod graph;
+pub mod graph;
+pub mod pass_builder;
